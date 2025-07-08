@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "es6",
+    "module": "commonjs",
+    "outDir": "./dist",
+    "rootDir": "backend/src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  },
+  "ts-node": {
+    // This block is the fix. It tells ts-node how to handle modules.
+    "compilerOptions": {
+      "module": "CommonJS"
+    }
+  },
+  "include": ["backend/src/**/*"],
+  "exclude": ["node_modules"]
+}

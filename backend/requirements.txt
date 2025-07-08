@@ -1,0 +1,8 @@
+# for pyttsx3
+pyttsx3
+
+# for WebApp
+Flask
+PyMuPDF
+nltk
+pyttsx3
