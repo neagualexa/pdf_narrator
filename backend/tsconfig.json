@@ -3,7 +3,7 @@
     "target": "es6",
     "module": "commonjs",
     "outDir": "./dist",
-    "rootDir": "backend/src",
+    "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -15,6 +15,6 @@
       "module": "CommonJS"
     }
   },
-  "include": ["backend/src/**/*"],
+  "include": ["src/**/*"],
   "exclude": ["node_modules"]
 }
