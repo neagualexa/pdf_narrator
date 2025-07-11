@@ -271,6 +271,40 @@ export default function App() {
     };
   }, [cleanup, cleanupAllCache]);
 
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Only handle arrow keys if we have sentences
+      if (sentences.length === 0) return;
+
+      // Prevent default behavior for arrow keys to avoid page scrolling
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+      }
+
+      switch (event.key) {
+        case "ArrowLeft":
+          handlePrevious();
+          break;
+        case "ArrowRight":
+          handleNext();
+          break;
+        case " ": // Spacebar for play/pause
+          event.preventDefault();
+          handlePlayPause();
+          break;
+      }
+    };
+
+    // Add event listener
+    document.addEventListener("keydown", handleKeyDown);
+
+    // Cleanup event listener
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [sentences.length, handleNext, handlePrevious, handlePlayPause]);
+
   return (
     <div className="app-wrapper">
       {isLoading && <LoadingSpinner />}
