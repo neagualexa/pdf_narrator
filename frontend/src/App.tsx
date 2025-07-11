@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useReducer, useCallback } from "react";
+import React, { useState, useReducer, useCallback, useEffect } from "react";
 import { PlaybackAction, useSpeechEvents } from "./hooks"; // Assuming hooks.ts is in the same directory
 import * as api from "./api"; // Assuming api.ts is in the same directory
 import "./App.css"; // Assuming App.css is in the same directory
@@ -22,6 +22,8 @@ interface FloatingControlsProps {
   onPrevious: () => void;
   onStop: () => void; // Added prop for the new stop button
   isPlaying: boolean;
+  speechSpeed: number;
+  onSpeedChange: (speed: number) => void;
 }
 
 // --- Reducer for Playback State ---
@@ -129,8 +131,53 @@ const FloatingControls: React.FC<FloatingControlsProps> = ({
   onPrevious,
   onStop, // New prop
   isPlaying,
+  speechSpeed,
+  onSpeedChange,
 }) => (
   <div className="floating-controls">
+    {/* Speed Control */}
+    <div className="speed-control">
+      <label htmlFor="speed-slider" className="speed-label">
+        <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+          <path d="M8 3a.5.5 0 0 1 .5.5v3.793l1.146-1.147a.5.5 0 0 1 .708.708l-2 2a.5.5 0 0 1-.708 0l-2-2a.5.5 0 1 1 .708-.708L7.5 7.293V3.5A.5.5 0 0 1 8 3z" />
+          <path d="M3.5 9.5a.5.5 0 0 1 .5-.5h8a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-1z" />
+        </svg>
+        {Math.round(speechSpeed)}%
+      </label>
+      <div className="speed-controls">
+        <button
+          onClick={() => onSpeedChange(Math.max(50, speechSpeed - 10))}
+          className="speed-button"
+          aria-label="Decrease speed by 10%"
+          disabled={speechSpeed <= 50}
+        >
+          <svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M4 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 4 8z" />
+          </svg>
+        </button>
+        <input
+          id="speed-slider"
+          type="range"
+          min="50"
+          max="300"
+          step="10"
+          value={speechSpeed}
+          onChange={(e) => onSpeedChange(Number(e.target.value))}
+          className="speed-slider"
+          aria-label="Speech speed"
+        />
+        <button
+          onClick={() => onSpeedChange(Math.min(300, speechSpeed + 10))}
+          className="speed-button"
+          aria-label="Increase speed by 10%"
+          disabled={speechSpeed >= 300}
+        >
+          <svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
+          </svg>
+        </button>
+      </div>
+    </div>
     <button
       onClick={onPrevious}
       aria-label="Previous sentence"
@@ -193,10 +240,10 @@ const FloatingControls: React.FC<FloatingControlsProps> = ({
         </svg>
       )}
     </button>
-    {/* New dedicated stop button */}
+    {/* Force stop/reset button */}
     <button
       onClick={onStop}
-      aria-label="Stop all audio"
+      aria-label="Force stop all audio and reset"
       className="control-button stop-all-button"
     >
       <svg width="24" height="24" fill="currentColor" viewBox="0 0 16 16">
@@ -232,6 +279,10 @@ export default function App() {
   const [sentences, setSentences] = useState<string[]>([]);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [speechSpeed, setSpeechSpeed] = useState<number>(160); // Default speed rate
+  const [speechTimeoutId, setSpeechTimeoutId] = useState<NodeJS.Timeout | null>(
+    null
+  );
 
   const [playbackState, dispatch] = useReducer(playbackReducer, {
     status: "idle",
@@ -271,18 +322,65 @@ export default function App() {
   const handlePlay = useCallback(
     (index: number) => {
       if (sentences[index]) {
-        dispatch({ type: "SET_INDEX", payload: index });
-        api
-          .speakSentence(sentences[index], index)
-          .catch((err) => setError(err.message));
+        // Clear any existing timeout
+        if (speechTimeoutId) {
+          clearTimeout(speechTimeoutId);
+        }
+
+        // Immediately set the playing state
+        dispatch({ type: "PLAY", payload: index });
+
+        // Estimate speech duration (roughly 3 words per second at normal speed)
+        const wordCount = sentences[index].split(" ").length;
+        const speechRate = speechSpeed; // words per minute
+        const estimatedDuration = (wordCount / speechRate) * 60 * 1000; // in milliseconds
+        const timeoutDuration = Math.max(estimatedDuration + 1000, 3000); // minimum 3 seconds
+
+        api.speakSentence(sentences[index], index, speechSpeed).catch((err) => {
+          dispatch({ type: "STOP" });
+          setError(err.message);
+        });
+
+        // Set timeout to automatically stop after estimated duration
+        const timeoutId = setTimeout(() => {
+          dispatch({ type: "STOP" });
+          setSpeechTimeoutId(null);
+        }, timeoutDuration);
+
+        setSpeechTimeoutId(timeoutId);
       }
     },
-    [sentences, setError]
+    [sentences, setError, speechSpeed, speechTimeoutId]
   );
 
   const handleStop = useCallback(() => {
+    // Clear any active timeout
+    if (speechTimeoutId) {
+      clearTimeout(speechTimeoutId);
+      setSpeechTimeoutId(null);
+    }
+
+    // Immediately stop the playing state
+    dispatch({ type: "STOP" });
+
+    // Forcefully stop speech on the backend
     api.stopSpeech().catch((err) => setError(err.message));
-  }, [setError]);
+  }, [setError, speechTimeoutId]);
+
+  // New function for forceful global stop (used by floating controls stop button)
+  const handleForceStop = useCallback(() => {
+    // Clear any active timeout
+    if (speechTimeoutId) {
+      clearTimeout(speechTimeoutId);
+      setSpeechTimeoutId(null);
+    }
+
+    // Stop the playing state but keep the current index
+    dispatch({ type: "STOP" });
+
+    // Forcefully stop all speech on the backend
+    api.stopSpeech().catch((err) => setError(err.message));
+  }, [setError, speechTimeoutId]);
 
   const handlePlayPause = useCallback(() => {
     if (playbackState.status === "playing") {
@@ -304,7 +402,20 @@ export default function App() {
     if (prevIndex >= 0) {
       handlePlay(prevIndex);
     }
-  }, [playbackState, sentences, handlePlay]);
+  }, [playbackState, handlePlay]);
+
+  const handleSpeedChange = useCallback((speed: number) => {
+    setSpeechSpeed(speed);
+  }, []);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (speechTimeoutId) {
+        clearTimeout(speechTimeoutId);
+      }
+    };
+  }, [speechTimeoutId]);
 
   return (
     <div className="app-wrapper">
@@ -379,8 +490,10 @@ export default function App() {
             onPlayPause={handlePlayPause}
             onNext={handleNext}
             onPrevious={handlePrevious}
-            onStop={handleStop}
+            onStop={handleForceStop}
             isPlaying={playbackState.status === "playing"}
+            speechSpeed={speechSpeed}
+            onSpeedChange={handleSpeedChange}
           />
         )}
         <footer className="footer">

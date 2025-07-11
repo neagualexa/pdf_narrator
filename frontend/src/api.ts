@@ -38,15 +38,17 @@ export async function uploadPdf(file: File): Promise<{ sentences: string[] }> {
  * Sends a sentence to the backend to be spoken.
  * @param sentence The text to speak.
  * @param index The index of the sentence in the list.
+ * @param speed The speech speed (words per minute).
  */
 export async function speakSentence(
   sentence: string,
-  index: number
+  index: number,
+  speed?: number
 ): Promise<void> {
   const response = await fetch(`${API_URL}/speak`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sentence, index }),
+    body: JSON.stringify({ sentence, index, speed }),
   });
   await handleResponse(response);
 }

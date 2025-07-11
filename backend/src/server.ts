@@ -84,7 +84,7 @@ app.post(
 
 // Route to trigger the Python TTS script
 app.post("/speak", (req: Request, res: Response): void => {
-  const { sentence } = req.body;
+  const { sentence, speed } = req.body;
 
   if (!sentence) {
     res.status(400).json({ error: "No sentence provided." });
@@ -99,11 +99,17 @@ app.post("/speak", (req: Request, res: Response): void => {
     activeTtsProcess.kill();
   }
 
-  // Spawn a new Python process for the new sentence.
-  activeTtsProcess = spawn("python", ["speak.py", sentence]);
+  // Spawn a new Python process for the new sentence with optional speed.
+  const args = ["speak.py", sentence];
+  if (speed && typeof speed === "number") {
+    args.push(speed.toString());
+  }
+  activeTtsProcess = spawn("python", args);
 
   console.log(
-    `Started new speech process (PID: ${activeTtsProcess.pid}) for sentence: "${sentence}"`
+    `Started new speech process (PID: ${
+      activeTtsProcess.pid
+    }) for sentence: "${sentence}"${speed ? ` at speed ${speed}` : ""}`
   );
 
   // **FIX:** Add null checks before attaching listeners to stdout and stderr.
@@ -129,6 +135,44 @@ app.post("/speak", (req: Request, res: Response): void => {
 
   // Respond to the frontend immediately.
   res.status(200).json({ message: "Speech initiated successfully." });
+});
+
+// Route to stop the current speech
+app.post("/stop", (req: Request, res: Response): void => {
+  if (activeTtsProcess) {
+    console.log(
+      `Force stopping speech process (PID: ${activeTtsProcess.pid}) via stop endpoint.`
+    );
+
+    try {
+      // Try graceful termination first
+      activeTtsProcess.kill("SIGTERM");
+
+      // Set a timeout for forceful kill if graceful doesn't work
+      setTimeout(() => {
+        if (activeTtsProcess) {
+          console.log(
+            `Force killing speech process (PID: ${activeTtsProcess.pid}) with SIGKILL.`
+          );
+          activeTtsProcess.kill("SIGKILL");
+          activeTtsProcess = null;
+        }
+      }, 1000); // 1 second timeout
+    } catch (error) {
+      console.error("Error stopping speech process:", error);
+      // Try force kill as fallback
+      try {
+        activeTtsProcess.kill("SIGKILL");
+      } catch (forceError) {
+        console.error("Error force killing speech process:", forceError);
+      }
+    }
+
+    activeTtsProcess = null;
+    res.status(200).json({ message: "Speech stopped forcefully." });
+  } else {
+    res.status(200).json({ message: "No active speech to stop." });
+  }
 });
 
 app.listen(port, () => {
