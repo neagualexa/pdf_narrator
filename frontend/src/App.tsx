@@ -48,8 +48,9 @@ export default function App() {
       const file = event.target.files?.[0];
       if (!file) return;
 
-      dispatchApp({ type: "SET_LOADING", payload: true });
+      // Clear error immediately when a new file is selected
       dispatchApp({ type: "SET_ERROR", payload: null });
+      dispatchApp({ type: "SET_LOADING", payload: true });
       dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
       dispatchPlayback({ type: "RESET" });
       dispatchApp({ type: "SET_SENTENCES", payload: [] });
@@ -372,22 +373,6 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Cache Status Display */}
-              <div
-                style={{
-                  marginBottom: "1rem",
-                  padding: "0.5rem",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                }}
-              >
-                <div style={{ fontSize: "0.9rem", color: "#666" }}>
-                  Cache Status: {audioCache.size} sentences cached
-                </div>
-              </div>
-
-              {error && <ErrorMessage message={error} />}
-
               {sentences.length > 0 && (
                 <div id="results-container">
                   <h2 className="results-title">Extracted Sentences</h2>
@@ -432,6 +417,22 @@ export default function App() {
                   </p>
                 )}
               </div>
+
+              {/* Cache Status Display */}
+              <div
+                style={{
+                  marginTop: "1rem",
+                  padding: "0.5rem",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                }}
+              >
+                <div style={{ fontSize: "0.9rem", color: "#666" }}>
+                  Cache Status: {audioCache.size} sentences cached
+                </div>
+              </div>
+
+              {error && <ErrorMessage message={error} />}
             </div>
           </div>
         </div>
