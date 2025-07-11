@@ -35,30 +35,103 @@ export async function uploadPdf(file: File): Promise<{ sentences: string[] }> {
 }
 
 /**
- * Sends a sentence to the backend to be spoken.
- * @param sentence The text to speak.
- * @param index The index of the sentence in the list.
+ * Generates an audio file for a sentence.
+ * @param sentence The text to convert to speech.
  * @param speed The speech speed (words per minute).
+ * @returns A promise that resolves with the audio URL.
  */
-export async function speakSentence(
+export async function generateAudio(
   sentence: string,
-  index: number,
   speed?: number
-): Promise<void> {
-  const response = await fetch(`${API_URL}/speak`, {
+): Promise<{ audioUrl: string; filename: string }> {
+  const response = await fetch(`${API_URL}/generate-audio`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sentence, index, speed }),
+    body: JSON.stringify({ sentence, speed }),
+  });
+  return handleResponse(response);
+}
+
+/**
+ * Checks if an audio file exists on the server.
+ * @param filename The filename of the audio file to check.
+ * @returns A promise that resolves with existence status and audio URL if it exists.
+ */
+export async function checkAudio(
+  filename: string
+): Promise<{ exists: boolean; audioUrl?: string }> {
+  const response = await fetch(`${API_URL}/check-audio/${filename}`);
+  return handleResponse(response);
+}
+
+/**
+ * Cleans up an audio file from the server after it has been loaded.
+ * @param filename The filename of the audio file to delete.
+ */
+export async function cleanupAudio(filename: string): Promise<void> {
+  try {
+    const response = await fetch(`${API_URL}/cleanup-audio`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    await handleResponse(response);
+  } catch (error: any) {
+    // If the error is about the file not existing, that's fine - it was already deleted
+    if (
+      error.message &&
+      (error.message.includes("already deleted") ||
+        error.message.includes("ENOENT"))
+    ) {
+      return; // Don't throw an error for this case
+    }
+    // For other errors, re-throw them
+    throw error;
+  }
+}
+
+/**
+ * Stops any currently running audio generation process on the backend.
+ */
+export async function stopAudio(): Promise<void> {
+  const response = await fetch(`${API_URL}/stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
   });
   await handleResponse(response);
 }
 
 /**
- * Sends a request to the backend to stop the current speech.
+ * Generates an audio file for a sentence with smart caching.
+ * @param sentence The text to convert to speech.
+ * @param speed The speech speed (words per minute).
+ * @param sentenceIndex The index of the sentence for smart caching.
+ * @returns A promise that resolves with the audio URL and caching info.
  */
-export async function stopSpeech(): Promise<void> {
-  const response = await fetch(`${API_URL}/stop`, {
+export async function generateAudioIndexed(
+  sentence: string,
+  speed?: number,
+  sentenceIndex?: number
+): Promise<{ audioUrl: string; filename: string; cached: boolean }> {
+  const response = await fetch(`${API_URL}/generate-audio-indexed`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sentence, speed, sentenceIndex }),
   });
-  await handleResponse(response);
+  return handleResponse(response);
+}
+
+/**
+ * Clears all audio cache files from the backend.
+ */
+export async function clearAudioCache(): Promise<{
+  success: boolean;
+  deletedCount: number;
+  message: string;
+}> {
+  const response = await fetch(`${API_URL}/clear-audio-cache`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  return handleResponse(response);
 }

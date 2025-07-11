@@ -2,58 +2,94 @@ import sys
 import nltk
 import json
 import re
+import signal
+from typing import List
 
-def filter_harvard_citations_and_references(text):
+# Global flag for graceful shutdown
+shutdown_requested = False
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    global shutdown_requested
+    shutdown_requested = True
+    print(json.dumps([]), file=sys.stderr)
+    sys.exit(1)
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
+def filter_harvard_citations_and_references(text: str) -> str:
     """
     Remove Harvard citations and reference sections from text.
+    Optimized with compiled regex patterns for better performance.
     """
-    # Remove in-text Harvard citations (Author, Year) or (Author Year)
-    # Patterns like: (Smith, 2020), (Johnson & Brown, 2019), (Smith et al., 2021)
-    text = re.sub(r'\([^()]*\b(?:19|20)\d{2}[^()]*\)', '', text)
+    global shutdown_requested
+    if shutdown_requested:
+        return text
     
-    # Remove citations with page numbers like (Smith, 2020, p. 45) or (Smith, 2020: 45)
-    text = re.sub(r'\([^()]*\b(?:19|20)\d{2}[^()]*[p\.:]?\s*\d+[^()]*\)', '', text)
+    # Compile regex patterns for better performance
+    patterns = [
+        # Remove in-text Harvard citations (Author, Year) or (Author Year)
+        re.compile(r'\([^()]*\b(?:19|20)\d{2}[^()]*\)'),
+        # Remove citations with page numbers
+        re.compile(r'\([^()]*\b(?:19|20)\d{2}[^()]*[p\.:]?\s*\d+[^()]*\)'),
+        # Remove standalone citations at the end of sentences
+        re.compile(r'\s*\([^()]*\b(?:19|20)\d{2}[^()]*\)\s*\.'),
+        # Remove "et al." references
+        re.compile(r'\bet\s+al\.?\b'),
+        # Remove ibid references
+        re.compile(r'\bibid\.?\b', re.IGNORECASE),
+        # Remove "According to [Author]" patterns
+        re.compile(r'According to [^,.()]*\([^()]*\b(?:19|20)\d{2}[^()]*\)', re.IGNORECASE),
+    ]
     
-    # Remove standalone citations at the end of sentences
-    text = re.sub(r'\s*\([^()]*\b(?:19|20)\d{2}[^()]*\)\s*\.', '.', text)
-    
-    # Remove "et al." references
-    text = re.sub(r'\bet\s+al\.?\b', '', text)
-    
-    # Remove ibid references
-    text = re.sub(r'\bibid\.?\b', '', text, flags=re.IGNORECASE)
-    
-    # Remove "According to [Author]" patterns often followed by citations
-    text = re.sub(r'According to [^,.()]*\([^()]*\b(?:19|20)\d{2}[^()]*\)', '', text, flags=re.IGNORECASE)
+    # Apply all patterns
+    for pattern in patterns:
+        if shutdown_requested:
+            break
+        text = pattern.sub('', text)
     
     # Clean up extra whitespace
-    text = re.sub(r'\s+', ' ', text)
-    text = text.strip()
+    text = re.sub(r'\s+', ' ', text).strip()
     
     return text
 
-def filter_reference_sections(sentences):
+def filter_reference_sections(sentences: List[str]) -> List[str]:
     """
     Remove sentences that appear to be from reference/bibliography sections.
+    Optimized with compiled patterns and early filtering.
     """
+    global shutdown_requested
+    if shutdown_requested:
+        return sentences
+    
     filtered_sentences = []
     
+    # Compile patterns for better performance
+    bibliography_pattern = re.compile(r'\b(?:19|20)\d{2}\b.*?\.\s*[A-Z][^.]*\.\s*[A-Z]')
+    reference_keywords = re.compile(r'^\s*(References?|Bibliography|Works?\s+Cited|Sources?)\s*\.?\s*$', re.IGNORECASE)
+    url_pattern = re.compile(r'\b(doi:|https?://|www\.)', re.IGNORECASE)
+    year_pattern = re.compile(r'\b(?:19|20)\d{2}\b')
+    
     for sentence in sentences:
+        if shutdown_requested:
+            break
+            
         # Skip sentences that look like bibliography entries
-        # Common patterns: Author, A. (Year). Title. Journal.
-        if re.search(r'\b(?:19|20)\d{2}\b.*?\.\s*[A-Z][^.]*\.\s*[A-Z]', sentence):
+        if bibliography_pattern.search(sentence):
             continue
             
         # Skip sentences starting with common reference keywords
-        if re.match(r'^\s*(References?|Bibliography|Works?\s+Cited|Sources?)\s*\.?\s*$', sentence, re.IGNORECASE):
+        if reference_keywords.match(sentence):
             continue
             
         # Skip sentences that are likely DOI or URL references
-        if re.search(r'\b(doi:|https?://|www\.)', sentence, re.IGNORECASE):
+        if url_pattern.search(sentence):
             continue
             
         # Skip sentences with multiple years (likely reference lists)
-        year_matches = re.findall(r'\b(?:19|20)\d{2}\b', sentence)
+        year_matches = year_pattern.findall(sentence)
         if len(year_matches) > 2:
             continue
             
@@ -65,34 +101,63 @@ def filter_reference_sections(sentences):
     
     return filtered_sentences
 
-def split_text_into_sentences(text):
+def split_text_into_sentences(text: str) -> None:
     """
     Uses NLTK to split a block of text into sentences, filters out Harvard citations
     and references, and prints them as a JSON array to standard output.
+    Optimized for better performance and error handling.
     """
+    global shutdown_requested
+    
     try:
         # Ensure the 'punkt' tokenizer is available
         try:
             nltk.data.find('tokenizers/punkt')
-        except nltk.downloader.DownloadError:
-            # This is a fallback, but it's better to run `nltk.download('punkt')` once manually
+        except LookupError:
+            # Download punkt if not available, but do it quietly
             nltk.download('punkt', quiet=True)
+
+        if shutdown_requested:
+            print(json.dumps([]))
+            return
 
         # First, filter out Harvard citations from the entire text
         filtered_text = filter_harvard_citations_and_references(text)
         
+        if shutdown_requested:
+            print(json.dumps([]))
+            return
+        
         # Split into sentences
         sentences = nltk.sent_tokenize(filtered_text)
+        
+        if shutdown_requested:
+            print(json.dumps([]))
+            return
         
         # Filter out reference sections and bibliography entries
         clean_sentences = filter_reference_sections(sentences)
         
-        # Print the list of clean sentences as a JSON string
-        print(json.dumps(clean_sentences))
+        # Additional filtering: remove empty sentences and normalize whitespace
+        final_sentences = []
+        for sentence in clean_sentences:
+            if shutdown_requested:
+                break
+            cleaned = sentence.strip()
+            if cleaned and len(cleaned) > 10:  # Minimum meaningful length
+                final_sentences.append(cleaned)
         
+        # Print the list of clean sentences as a JSON string
+        print(json.dumps(final_sentences))
+        
+    except KeyboardInterrupt:
+        print(json.dumps([]), file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         # Output any errors to stderr
-        print(f"Error in sentence splitting script: {e}", file=sys.stderr)
+        error_msg = f"Error in sentence splitting script: {e}"
+        print(error_msg, file=sys.stderr)
+        print(json.dumps([]), file=sys.stderr)
         sys.exit(1)
 
 if __name__ == "__main__":

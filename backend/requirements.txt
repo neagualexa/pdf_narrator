@@ -1,8 +1,7 @@
-# for pyttsx3
+# for pyttsx3 text-to-speech (converted via ffmpeg for browser compatibility)
 pyttsx3
 
 # for WebApp
 Flask
 PyMuPDF
 nltk
-pyttsx3
