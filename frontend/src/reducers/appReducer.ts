@@ -8,6 +8,7 @@ export const initialAppState: AppState = {
   generatingAudioIndex: null,
   speechSpeed: 160,
   audioCache: new Map(),
+  isContinuousPlayback: false,
 };
 
 export function appReducer(state: AppState, action: AppAction): AppState {
@@ -36,6 +37,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, audioCache: cacheWithoutItem };
     case "CLEAR_CACHE":
       return { ...state, audioCache: new Map() };
+    case "SET_CONTINUOUS_PLAYBACK":
+      return { ...state, isContinuousPlayback: action.payload };
     case "RESET_ALL":
       return { ...initialAppState, speechSpeed: state.speechSpeed };
     default:

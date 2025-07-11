@@ -12,6 +12,7 @@ export interface AppState {
   generatingAudioIndex: number | null;
   speechSpeed: number;
   audioCache: Map<number, AudioCacheEntry>;
+  isContinuousPlayback: boolean;
 }
 
 export interface PlaybackState {
@@ -36,6 +37,7 @@ export type AppAction =
   | { type: "ADD_TO_CACHE"; payload: { index: number; entry: AudioCacheEntry } }
   | { type: "REMOVE_FROM_CACHE"; payload: number }
   | { type: "CLEAR_CACHE" }
+  | { type: "SET_CONTINUOUS_PLAYBACK"; payload: boolean }
   | { type: "RESET_ALL" };
 
 export interface SentenceItemProps {

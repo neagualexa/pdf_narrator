@@ -35,6 +35,7 @@ export default function App() {
     generatingAudioIndex,
     speechSpeed,
     audioCache,
+    isContinuousPlayback,
   } = appState;
 
   // Use ref to track current cache for cleanup without causing re-renders
@@ -49,6 +50,7 @@ export default function App() {
 
       dispatchApp({ type: "SET_LOADING", payload: true });
       dispatchApp({ type: "SET_ERROR", payload: null });
+      dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
       dispatchPlayback({ type: "RESET" });
       dispatchApp({ type: "SET_SENTENCES", payload: [] });
 
@@ -139,7 +141,16 @@ export default function App() {
           filename,
           () => {
             // On audio ended
-            dispatchPlayback({ type: "STOP" });
+            dispatchPlayback({ type: "STOP" }); // If in continuous playback mode, automatically play next sentence
+            if (isContinuousPlayback && index + 1 < sentences.length) {
+              // Use setTimeout to avoid recursive calls and allow state to update
+              setTimeout(() => {
+                handlePlay(index + 1);
+              }, 100);
+            } else if (isContinuousPlayback && index + 1 >= sentences.length) {
+              // Reached the end, disable continuous playback
+              dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
+            }
 
             // Preload adjacent sentences for smooth navigation
             preloadAdjacentSentences(
@@ -182,6 +193,7 @@ export default function App() {
       playbackState,
       generatingAudioIndex,
       audioCache,
+      isContinuousPlayback,
       playAudio,
       generateAudioForSentence,
       preloadAdjacentSentences,
@@ -191,6 +203,9 @@ export default function App() {
 
   const handleStop = useCallback(async () => {
     try {
+      // Disable continuous playback
+      dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
+
       // Stop current audio playback
       await stopCurrentAudio();
 
@@ -217,17 +232,39 @@ export default function App() {
     }
   }, [stopCurrentAudio, cleanupAllCache]);
 
+  // Simple pause function that doesn't clear cache
+  const handlePause = useCallback(async () => {
+    try {
+      // Disable continuous playback
+      dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
+
+      // Stop current audio playback without clearing cache
+      await stopCurrentAudio();
+      dispatchPlayback({ type: "STOP" });
+    } catch (error) {
+      console.error("Error during pause:", error);
+      dispatchPlayback({ type: "STOP" });
+    }
+  }, [stopCurrentAudio]);
+
   const handlePlayPause = useCallback(() => {
     if (playbackState.status === "playing") {
-      handleStop();
+      // If currently playing, just stop audio without clearing cache
+      dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
+      stopCurrentAudio();
+      dispatchPlayback({ type: "STOP" });
     } else if (sentences.length > 0) {
+      // Start continuous playback from current position
+      dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: true });
       handlePlay(playbackState.currentIndex);
     }
-  }, [playbackState, sentences, handlePlay, handleStop]);
+  }, [playbackState, sentences, handlePlay, stopCurrentAudio]);
 
   const handleNext = useCallback(() => {
     const nextIndex = playbackState.currentIndex + 1;
     if (nextIndex < sentences.length) {
+      // Disable continuous playback when manually navigating (but don't clear cache)
+      dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
       handlePlay(nextIndex);
     }
   }, [playbackState, sentences, handlePlay]);
@@ -235,6 +272,8 @@ export default function App() {
   const handlePrevious = useCallback(() => {
     const prevIndex = playbackState.currentIndex - 1;
     if (prevIndex >= 0) {
+      // Disable continuous playback when manually navigating (but don't clear cache)
+      dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
       handlePlay(prevIndex);
     }
   }, [playbackState, handlePlay]);
@@ -358,8 +397,15 @@ export default function App() {
                         key={index}
                         sentence={sentence}
                         index={index}
-                        onPlay={() => handlePlay(index)}
-                        onStop={handleStop}
+                        onPlay={() => {
+                          // Disable continuous playback when manually selecting a sentence
+                          dispatchApp({
+                            type: "SET_CONTINUOUS_PLAYBACK",
+                            payload: false,
+                          });
+                          handlePlay(index);
+                        }}
+                        onStop={handlePause}
                         isPlaying={
                           playbackState.status === "playing" &&
                           playbackState.currentIndex === index
