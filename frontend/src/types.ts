@@ -44,6 +44,7 @@ export interface SentenceItemProps {
   onPlay: () => void;
   onStop: () => void;
   isPlaying: boolean;
+  isLastPlayed: boolean;
   isGeneratingAudio: boolean;
 }
 

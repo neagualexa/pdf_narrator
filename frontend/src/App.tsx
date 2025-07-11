@@ -330,6 +330,7 @@ export default function App() {
                           playbackState.status === "playing" &&
                           playbackState.currentIndex === index
                         }
+                        isLastPlayed={playbackState.currentIndex === index}
                         isGeneratingAudio={generatingAudioIndex === index}
                       />
                     ))}

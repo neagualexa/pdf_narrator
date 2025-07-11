@@ -7,12 +7,13 @@ export const SentenceItem: React.FC<SentenceItemProps> = ({
   onPlay,
   onStop,
   isPlaying,
+  isLastPlayed,
   isGeneratingAudio,
 }) => (
   <div
-    className={`sentence-item ${isPlaying ? "playing" : ""} ${
-      isGeneratingAudio ? "generating" : ""
-    }`}
+    className={`sentence-item ${
+      isPlaying ? "playing" : isLastPlayed ? "last-played" : ""
+    } ${isGeneratingAudio ? "generating" : ""}`}
   >
     <p className="sentence-text">{sentence}</p>
     <button
