@@ -142,7 +142,7 @@ app.post(
 
 // Route to generate audio with sentence index for smart caching
 app.post("/generate-audio-indexed", (req: Request, res: Response): void => {
-  const { sentence, speed, sentenceIndex } = req.body;
+  const { sentence, speed, sentenceIndex, voiceId } = req.body;
 
   if (!sentence) {
     res.status(400).json({ error: "No sentence provided." });
@@ -153,7 +153,8 @@ app.post("/generate-audio-indexed", (req: Request, res: Response): void => {
   const expectedFilename = generateExpectedFilename(
     sentence,
     speed || 180,
-    sentenceIndex
+    sentenceIndex,
+    voiceId
   );
   const audioPath = path.join(__dirname, "../audio_files", expectedFilename);
 
@@ -181,6 +182,9 @@ app.post("/generate-audio-indexed", (req: Request, res: Response): void => {
     args.push("audio_files"); // output directory
     if (sentenceIndex !== undefined) {
       args.push(sentenceIndex.toString()); // sentence index
+    }
+    if (voiceId) {
+      args.push(voiceId); // voice ID
     }
 
     // Use the virtual environment Python and track the process
@@ -255,12 +259,13 @@ app.post("/generate-audio-indexed", (req: Request, res: Response): void => {
 function generateExpectedFilename(
   text: string,
   speed: number,
-  sentenceIndex?: number
+  sentenceIndex?: number,
+  voiceId?: string
 ): string {
   const crypto = require("crypto");
   const textHash = crypto
     .createHash("md5")
-    .update(`${text}_${speed}`)
+    .update(`${text}_${speed}_${voiceId || "default"}`)
     .digest("hex")
     .substring(0, 8);
 
@@ -537,6 +542,42 @@ app.post("/clear-audio-cache", (req: Request, res: Response): void => {
     console.error("Error during audio cache cleanup:", error);
     res.status(500).json({ error: "Failed to clear audio cache." });
   }
+});
+
+// Route to get available TTS voices
+app.get("/voices", (req: Request, res: Response): void => {
+  const getVoicesScript = path.join(__dirname, "../get_voices.py");
+
+  runPythonScript(getVoicesScript, [])
+    .then(({ stdout, stderr, code }) => {
+      if (code === 0 && stdout.trim()) {
+        try {
+          const result = JSON.parse(stdout.trim());
+          if (result.success) {
+            res.json({
+              success: true,
+              voices: result.voices,
+              count: result.count,
+            });
+          } else {
+            console.error("Python script error:", result.error);
+            res.status(500).json({ error: result.error });
+          }
+        } catch (parseError) {
+          console.error("Failed to parse voices JSON:", parseError);
+          res.status(500).json({ error: "Failed to parse voice data" });
+        }
+      } else {
+        console.error("Python script failed:", stderr);
+        res.status(500).json({ error: "Failed to get available voices" });
+      }
+    })
+    .catch((error) => {
+      console.error("Error running get voices script:", error);
+      res
+        .status(500)
+        .json({ error: "Failed to execute voice detection script" });
+    });
 });
 
 app.listen(port, () => {

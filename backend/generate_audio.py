@@ -21,7 +21,7 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 
-def text_to_audio_file(text, speed=180, output_dir="audio_files", sentence_index=None):
+def text_to_audio_file(text, speed=180, output_dir="audio_files", sentence_index=None, voice_id=None):
     """
     Generates an audio file from text using pyttsx3 and converts it to browser-compatible format using ffmpeg.
     
@@ -30,6 +30,7 @@ def text_to_audio_file(text, speed=180, output_dir="audio_files", sentence_index
         speed (int): The speech rate in words per minute (default: 180)
         output_dir (str): Directory to save audio files
         sentence_index (int): Optional sentence index to include in filename for caching
+        voice_id (str): Optional voice ID to use for speech synthesis
     
     Returns:
         str: Path to the generated audio file
@@ -44,8 +45,8 @@ def text_to_audio_file(text, speed=180, output_dir="audio_files", sentence_index
         # Ensure output directory exists
         Path(output_dir).mkdir(exist_ok=True)
         
-        # Create a unique filename based on text hash, speed, and sentence index
-        text_hash = hashlib.md5(f"{text}_{speed}".encode()).hexdigest()[:8]
+        # Create a unique filename based on text hash, speed, voice, and sentence index
+        text_hash = hashlib.md5(f"{text}_{speed}_{voice_id or 'default'}".encode()).hexdigest()[:8]
         
         # Include sentence index in filename if provided for better caching
         if sentence_index is not None:
@@ -79,8 +80,23 @@ def text_to_audio_file(text, speed=180, output_dir="audio_files", sentence_index
             # Set properties for better performance
             engine.setProperty('rate', speed)
             
-            # Get available voices and use a faster one if available
-            # voices = engine.getProperty('voices')
+            # Set voice if specified
+            if voice_id:
+                voices = engine.getProperty('voices')
+                # Try to find the voice by ID first
+                for voice in voices:
+                    if voice.id == voice_id:
+                        engine.setProperty('voice', voice.id)
+                        break
+                else:
+                    # If voice ID not found, try to match by index (for backward compatibility)
+                    try:
+                        voice_index = int(voice_id)
+                        if 0 <= voice_index < len(voices):
+                            engine.setProperty('voice', voices[voice_index].id)
+                    except (ValueError, IndexError):
+                        # If voice not found, use default voice
+                        print(f"Warning: Voice '{voice_id}' not found, using default voice", file=sys.stderr)
             
             # Save to temporary file
             engine.save_to_file(text, temp_filepath)
@@ -154,7 +170,7 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         result = {
             "success": False,
-            "error": "Usage: python generate_audio.py <text> [speed] [output_dir] [sentence_index]"
+            "error": "Usage: python generate_audio.py <text> [speed] [output_dir] [sentence_index] [voice_id]"
         }
         print(json.dumps(result), file=sys.stderr)
         sys.exit(1)
@@ -163,9 +179,10 @@ if __name__ == "__main__":
     speed = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 180
     output_dir = sys.argv[3] if len(sys.argv) > 3 else "audio_files"
     sentence_index = int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4].isdigit() else None
+    voice_id = sys.argv[5] if len(sys.argv) > 5 else None
     
     try:
-        audio_path = text_to_audio_file(text, speed, output_dir, sentence_index)
+        audio_path = text_to_audio_file(text, speed, output_dir, sentence_index, voice_id)
         # Return JSON response for easier parsing
         result = {
             "success": True,

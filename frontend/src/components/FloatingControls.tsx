@@ -7,53 +7,8 @@ export const FloatingControls: React.FC<FloatingControlsProps> = ({
   onPrevious,
   onStop,
   isPlaying,
-  speechSpeed,
-  onSpeedChange,
 }) => (
   <div className="floating-controls">
-    {/* Speed Control */}
-    <div className="speed-control">
-      <label htmlFor="speed-slider" className="speed-label">
-        <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-          <path d="M8 3a.5.5 0 0 1 .5.5v3.793l1.146-1.147a.5.5 0 0 1 .708.708l-2 2a.5.5 0 0 1-.708 0l-2-2a.5.5 0 1 1 .708-.708L7.5 7.293V3.5A.5.5 0 0 1 8 3z" />
-          <path d="M3.5 9.5a.5.5 0 0 1 .5-.5h8a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-1z" />
-        </svg>
-        {Math.round(speechSpeed)}%
-      </label>
-      <div className="speed-controls">
-        <button
-          onClick={() => onSpeedChange(Math.max(50, speechSpeed - 10))}
-          className="speed-button"
-          aria-label="Decrease speed by 10%"
-          disabled={speechSpeed <= 50}
-        >
-          <svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-            <path d="M4 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 4 8z" />
-          </svg>
-        </button>
-        <input
-          id="speed-slider"
-          type="range"
-          min="50"
-          max="300"
-          step="10"
-          value={speechSpeed}
-          onChange={(e) => onSpeedChange(Number(e.target.value))}
-          className="speed-slider"
-          aria-label="Speech speed"
-        />
-        <button
-          onClick={() => onSpeedChange(Math.min(300, speechSpeed + 10))}
-          className="speed-button"
-          aria-label="Increase speed by 10%"
-          disabled={speechSpeed >= 300}
-        >
-          <svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-            <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
-          </svg>
-        </button>
-      </div>
-    </div>
     <button
       onClick={onPrevious}
       aria-label="Previous sentence"

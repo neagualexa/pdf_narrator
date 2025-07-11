@@ -9,6 +9,7 @@ import { useAudioCache } from "./hooks/useAudioCache";
 import { LoadingSpinner, ErrorMessage } from "./components/LoadingSpinner";
 import { SentenceItem } from "./components/SentenceItem";
 import { FloatingControls } from "./components/FloatingControls";
+import { VoiceControls } from "./components/VoiceControls";
 import * as api from "./api";
 import "./App.css";
 
@@ -36,6 +37,9 @@ export default function App() {
     speechSpeed,
     audioCache,
     isContinuousPlayback,
+    selectedVoiceId,
+    availableVoices,
+    voicesLoading,
   } = appState;
 
   // Use ref to track current cache for cleanup without causing re-renders
@@ -118,7 +122,8 @@ export default function App() {
               index,
               audioCache,
               (newCache) =>
-                dispatchApp({ type: "SET_AUDIO_CACHE", payload: newCache })
+                dispatchApp({ type: "SET_AUDIO_CACHE", payload: newCache }),
+              selectedVoiceId
             );
 
             if (!audioUrlResult) {
@@ -160,7 +165,8 @@ export default function App() {
               audioCache,
               speechSpeed,
               (newCache) =>
-                dispatchApp({ type: "SET_AUDIO_CACHE", payload: newCache })
+                dispatchApp({ type: "SET_AUDIO_CACHE", payload: newCache }),
+              selectedVoiceId
             ).catch((err: any) => {
               console.warn("Post-playback preload failed:", err);
             });
@@ -195,6 +201,7 @@ export default function App() {
       generatingAudioIndex,
       audioCache,
       isContinuousPlayback,
+      selectedVoiceId,
       playAudio,
       generateAudioForSentence,
       preloadAdjacentSentences,
@@ -283,6 +290,10 @@ export default function App() {
     dispatchApp({ type: "SET_SPEECH_SPEED", payload: speed });
   }, []);
 
+  const handleVoiceChange = useCallback((voiceId: string) => {
+    dispatchApp({ type: "SET_SELECTED_VOICE", payload: voiceId });
+  }, []);
+
   // Stable cleanup function to avoid dependencies issues
   const stableCleanupCache = useCallback(() => {
     if (audioCacheRef.current.size > 0) {
@@ -345,9 +356,51 @@ export default function App() {
     };
   }, [sentences.length, handleNext, handlePrevious, handlePlayPause]);
 
+  // Load available voices on component mount
+  useEffect(() => {
+    async function loadVoices() {
+      try {
+        dispatchApp({ type: "SET_VOICES_LOADING", payload: true });
+        const voicesData = await api.getAvailableVoices();
+        if (voicesData.success) {
+          dispatchApp({
+            type: "SET_AVAILABLE_VOICES",
+            payload: voicesData.voices,
+          });
+          // Set the first voice as default if none selected
+          if (!selectedVoiceId && voicesData.voices.length > 0) {
+            dispatchApp({
+              type: "SET_SELECTED_VOICE",
+              payload: voicesData.voices[0].id,
+            });
+          }
+        } else {
+          console.warn("Failed to load voices:", voicesData);
+        }
+      } catch (error) {
+        console.error("Error loading voices:", error);
+      } finally {
+        dispatchApp({ type: "SET_VOICES_LOADING", payload: false });
+      }
+    }
+
+    loadVoices();
+  }, [selectedVoiceId]);
+
   return (
     <div className="app-wrapper">
       {isLoading && <LoadingSpinner />}
+
+      {/* Voice Controls Panel */}
+      <VoiceControls
+        selectedVoiceId={selectedVoiceId}
+        onVoiceChange={handleVoiceChange}
+        speechSpeed={speechSpeed}
+        onSpeedChange={handleSpeedChange}
+        voices={availableVoices}
+        isLoading={voicesLoading}
+      />
+
       <div className="container">
         <div className="card">
           <h1 className="title">PDF to Audio Converter</h1>
@@ -443,8 +496,6 @@ export default function App() {
             onPrevious={handlePrevious}
             onStop={handleStop}
             isPlaying={playbackState.status === "playing"}
-            speechSpeed={speechSpeed}
-            onSpeedChange={handleSpeedChange}
           />
         )}
         <footer className="footer">

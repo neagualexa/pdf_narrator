@@ -75,7 +75,8 @@ export function useAudioCache() {
       speechSpeed: number,
       index: number,
       audioCache: Map<number, AudioCacheEntry>,
-      updateCache: (newCache: Map<number, AudioCacheEntry>) => void
+      updateCache: (newCache: Map<number, AudioCacheEntry>) => void,
+      voiceId?: string | null
     ): Promise<string | null> => {
       if (!sentence) return null;
 
@@ -83,7 +84,8 @@ export function useAudioCache() {
         const response = await api.generateAudioIndexed(
           sentence,
           speechSpeed,
-          index
+          index,
+          voiceId || undefined
         );
         const audioUrl = response.audioUrl;
         const filename = response.filename;
@@ -117,7 +119,8 @@ export function useAudioCache() {
       sentences: string[],
       audioCache: Map<number, AudioCacheEntry>,
       speechSpeed: number,
-      updateCache: (newCache: Map<number, AudioCacheEntry>) => void
+      updateCache: (newCache: Map<number, AudioCacheEntry>) => void,
+      voiceId?: string | null
     ) => {
       const indicesToPreload = [];
 
@@ -142,7 +145,8 @@ export function useAudioCache() {
             speechSpeed,
             index,
             audioCache,
-            updateCache
+            updateCache,
+            voiceId
           );
           // Small delay between requests to be gentle on the backend
           await new Promise((resolve) => setTimeout(resolve, 200));

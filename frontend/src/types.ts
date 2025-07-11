@@ -13,6 +13,9 @@ export interface AppState {
   speechSpeed: number;
   audioCache: Map<number, AudioCacheEntry>;
   isContinuousPlayback: boolean;
+  selectedVoiceId: string | null;
+  availableVoices: Voice[];
+  voicesLoading: boolean;
 }
 
 export interface PlaybackState {
@@ -38,6 +41,9 @@ export type AppAction =
   | { type: "REMOVE_FROM_CACHE"; payload: number }
   | { type: "CLEAR_CACHE" }
   | { type: "SET_CONTINUOUS_PLAYBACK"; payload: boolean }
+  | { type: "SET_SELECTED_VOICE"; payload: string | null }
+  | { type: "SET_AVAILABLE_VOICES"; payload: Voice[] }
+  | { type: "SET_VOICES_LOADING"; payload: boolean }
   | { type: "RESET_ALL" };
 
 export interface SentenceItemProps {
@@ -56,10 +62,27 @@ export interface FloatingControlsProps {
   onPrevious: () => void;
   onStop: () => void;
   isPlaying: boolean;
-  speechSpeed: number;
-  onSpeedChange: (speed: number) => void;
 }
 
 export interface ErrorMessageProps {
   message: string;
+}
+
+// Voice-related types
+export interface Voice {
+  id: string;
+  name: string;
+  languages: string[];
+  gender: string;
+  age: string;
+  index: number;
+}
+
+export interface VoiceControlsProps {
+  selectedVoiceId: string | null;
+  onVoiceChange: (voiceId: string) => void;
+  speechSpeed: number;
+  onSpeedChange: (speed: number) => void;
+  voices: Voice[];
+  isLoading: boolean;
 }

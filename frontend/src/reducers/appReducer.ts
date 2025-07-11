@@ -9,6 +9,9 @@ export const initialAppState: AppState = {
   speechSpeed: 160,
   audioCache: new Map(),
   isContinuousPlayback: false,
+  selectedVoiceId: null,
+  availableVoices: [],
+  voicesLoading: false,
 };
 
 export function appReducer(state: AppState, action: AppAction): AppState {
@@ -39,8 +42,19 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, audioCache: new Map() };
     case "SET_CONTINUOUS_PLAYBACK":
       return { ...state, isContinuousPlayback: action.payload };
+    case "SET_SELECTED_VOICE":
+      return { ...state, selectedVoiceId: action.payload };
+    case "SET_AVAILABLE_VOICES":
+      return { ...state, availableVoices: action.payload };
+    case "SET_VOICES_LOADING":
+      return { ...state, voicesLoading: action.payload };
     case "RESET_ALL":
-      return { ...initialAppState, speechSpeed: state.speechSpeed };
+      return {
+        ...initialAppState,
+        speechSpeed: state.speechSpeed,
+        selectedVoiceId: state.selectedVoiceId,
+        availableVoices: state.availableVoices,
+      };
     default:
       return state;
   }
