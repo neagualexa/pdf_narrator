@@ -16,6 +16,8 @@ export interface AppState {
   selectedVoiceId: string | null;
   availableVoices: Voice[];
   voicesLoading: boolean;
+  currentTtsEngine: "pyttsx3" | "piper";
+  availableTtsEngines: string[];
 }
 
 export interface PlaybackState {
@@ -44,6 +46,8 @@ export type AppAction =
   | { type: "SET_SELECTED_VOICE"; payload: string | null }
   | { type: "SET_AVAILABLE_VOICES"; payload: Voice[] }
   | { type: "SET_VOICES_LOADING"; payload: boolean }
+  | { type: "SET_CURRENT_TTS_ENGINE"; payload: "pyttsx3" | "piper" }
+  | { type: "SET_AVAILABLE_TTS_ENGINES"; payload: string[] }
   | { type: "RESET_ALL" };
 
 export interface SentenceItemProps {
@@ -76,6 +80,8 @@ export interface Voice {
   gender: string;
   age: string;
   index: number;
+  engine: string;
+  type: string;
 }
 
 export interface VoiceControlsProps {
@@ -85,4 +91,6 @@ export interface VoiceControlsProps {
   onSpeedChange: (speed: number) => void;
   voices: Voice[];
   isLoading: boolean;
+  currentTtsEngine: "pyttsx3" | "piper";
+  onTtsEngineChange: (engine: "pyttsx3" | "piper") => void;
 }

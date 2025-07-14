@@ -6,12 +6,14 @@ export const initialAppState: AppState = {
   isLoading: false,
   error: null,
   generatingAudioIndex: null,
-  speechSpeed: 160,
+  speechSpeed: 200,
   audioCache: new Map(),
   isContinuousPlayback: false,
   selectedVoiceId: null,
   availableVoices: [],
   voicesLoading: false,
+  currentTtsEngine: "piper",
+  availableTtsEngines: ["pyttsx3", "piper"],
 };
 
 export function appReducer(state: AppState, action: AppAction): AppState {
@@ -48,12 +50,18 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, availableVoices: action.payload };
     case "SET_VOICES_LOADING":
       return { ...state, voicesLoading: action.payload };
+    case "SET_CURRENT_TTS_ENGINE":
+      return { ...state, currentTtsEngine: action.payload };
+    case "SET_AVAILABLE_TTS_ENGINES":
+      return { ...state, availableTtsEngines: action.payload };
     case "RESET_ALL":
       return {
         ...initialAppState,
         speechSpeed: state.speechSpeed,
         selectedVoiceId: state.selectedVoiceId,
         availableVoices: state.availableVoices,
+        currentTtsEngine: state.currentTtsEngine,
+        availableTtsEngines: state.availableTtsEngines,
       };
     default:
       return state;

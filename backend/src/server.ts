@@ -24,6 +24,9 @@ app.use("/audio", express.static(path.join(__dirname, "../audio_files")));
 // Track active TTS processes for better resource management
 const activeTtsProcesses = new Map<string, ChildProcess>();
 
+// TTS Engine Selection
+let currentTtsEngine: "pyttsx3" | "piper" = "piper"; // Default to Piper
+
 // Cleanup function for old processes
 function cleanupProcess(processId: string) {
   const process = activeTtsProcesses.get(processId);
@@ -154,7 +157,8 @@ app.post("/generate-audio-indexed", (req: Request, res: Response): void => {
     sentence,
     speed || 180,
     sentenceIndex,
-    voiceId
+    voiceId,
+    currentTtsEngine
   );
   const audioPath = path.join(__dirname, "../audio_files", expectedFilename);
 
@@ -173,18 +177,44 @@ app.post("/generate-audio-indexed", (req: Request, res: Response): void => {
   const processId = crypto.randomUUID();
 
   try {
-    // Call the Python script to generate audio file with sentence index
-    const scriptPath = path.join(__dirname, "../generate_audio.py");
+    // Choose the appropriate script based on current TTS engine
+    const scriptPath =
+      currentTtsEngine === "piper"
+        ? path.join(__dirname, "../generate_audio_piper.py")
+        : path.join(__dirname, "../generate_audio.py");
+
     const args = [sentence];
-    if (speed && typeof speed === "number") {
-      args.push(speed.toString());
-    }
-    args.push("audio_files"); // output directory
-    if (sentenceIndex !== undefined) {
-      args.push(sentenceIndex.toString()); // sentence index
-    }
-    if (voiceId) {
-      args.push(voiceId); // voice ID
+
+    if (currentTtsEngine === "piper") {
+      // Piper arguments: text, voice_id, speed, output_dir, sentence_index
+      if (voiceId) {
+        args.push(voiceId);
+      } else {
+        args.push("en_US-lessac-high"); // Default Piper voice
+      }
+      if (speed && typeof speed === "number") {
+        // Convert pyttsx3 speed (words per minute) to Piper speed multiplier
+        const piperSpeed = Math.min(2.0, Math.max(0.5, speed / 180));
+        args.push(piperSpeed.toString());
+      } else {
+        args.push("1.0"); // Default speed
+      }
+      args.push("audio_files"); // output directory
+      if (sentenceIndex !== undefined) {
+        args.push(sentenceIndex.toString()); // sentence index
+      }
+    } else {
+      // pyttsx3 arguments: text, speed, output_dir, sentence_index, voice_id
+      if (speed && typeof speed === "number") {
+        args.push(speed.toString());
+      }
+      args.push("audio_files"); // output directory
+      if (sentenceIndex !== undefined) {
+        args.push(sentenceIndex.toString()); // sentence index
+      }
+      if (voiceId) {
+        args.push(voiceId); // voice ID
+      }
     }
 
     // Use the virtual environment Python and track the process
@@ -260,19 +290,22 @@ function generateExpectedFilename(
   text: string,
   speed: number,
   sentenceIndex?: number,
-  voiceId?: string
+  voiceId?: string,
+  engine?: string
 ): string {
   const crypto = require("crypto");
   const textHash = crypto
     .createHash("md5")
-    .update(`${text}_${speed}_${voiceId || "default"}`)
+    .update(`${text}_${speed}_${voiceId || "default"}_${engine || "pyttsx3"}`)
     .digest("hex")
     .substring(0, 8);
 
+  const enginePrefix = engine === "piper" ? "piper_" : "";
+
   if (sentenceIndex !== undefined && sentenceIndex !== null) {
-    return `speech_idx${sentenceIndex}_${textHash}.mp3`;
+    return `${enginePrefix}speech_idx${sentenceIndex}_${textHash}.mp3`;
   } else {
-    return `speech_${textHash}.mp3`;
+    return `${enginePrefix}speech_${textHash}.mp3`;
   }
 }
 
@@ -440,7 +473,7 @@ app.post("/stop", (req: Request, res: Response): void => {
   }
 });
 
-// Route to cleanup distant audio files (5+ sentences away from current index)
+// Route to cleanup distant audio files (2+ sentences away from current index)
 app.post("/cleanup-distant-audio", (req: Request, res: Response): void => {
   const { currentSentenceIndex } = req.body;
 
@@ -468,8 +501,8 @@ app.post("/cleanup-distant-audio", (req: Request, res: Response): void => {
         const fileIndex = parseInt(match[1]);
         const distance = Math.abs(fileIndex - currentSentenceIndex);
 
-        // Only delete if 5+ sentences away
-        if (distance >= 5) {
+        // Only delete if 2+ sentences away (keep current + 1 before + 1 after)
+        if (distance >= 2) {
           const filePath = path.join(audioDir, filename);
           try {
             fs.unlinkSync(filePath);
@@ -546,7 +579,7 @@ app.post("/clear-audio-cache", (req: Request, res: Response): void => {
 
 // Route to get available TTS voices
 app.get("/voices", (req: Request, res: Response): void => {
-  const getVoicesScript = path.join(__dirname, "../get_voices.py");
+  const getVoicesScript = path.join(__dirname, "../get_voices_combined.py");
 
   runPythonScript(getVoicesScript, [])
     .then(({ stdout, stderr, code }) => {
@@ -558,6 +591,8 @@ app.get("/voices", (req: Request, res: Response): void => {
               success: true,
               voices: result.voices,
               count: result.count,
+              engines: result.engines,
+              currentEngine: currentTtsEngine,
             });
           } else {
             console.error("Python script error:", result.error);
@@ -578,6 +613,52 @@ app.get("/voices", (req: Request, res: Response): void => {
         .status(500)
         .json({ error: "Failed to execute voice detection script" });
     });
+});
+
+// Route to get/set current TTS engine
+app.get("/tts-engine", (req: Request, res: Response): void => {
+  res.json({
+    success: true,
+    currentEngine: currentTtsEngine,
+    availableEngines: ["pyttsx3", "piper"],
+  });
+});
+
+app.post("/tts-engine", (req: Request, res: Response): void => {
+  const { engine } = req.body;
+
+  if (!engine || !["pyttsx3", "piper"].includes(engine)) {
+    res.status(400).json({
+      error: "Invalid engine. Must be 'pyttsx3' or 'piper'",
+    });
+    return;
+  }
+
+  currentTtsEngine = engine;
+  res.json({
+    success: true,
+    currentEngine: currentTtsEngine,
+    message: `TTS engine switched to ${engine}`,
+  });
+});
+
+// Route to set the TTS engine
+app.post("/set-tts-engine", (req: Request, res: Response): void => {
+  const { engine } = req.body;
+
+  if (engine !== "pyttsx3" && engine !== "piper") {
+    res.status(400).json({ error: "Invalid TTS engine specified." });
+    return;
+  }
+
+  currentTtsEngine = engine;
+
+  res.json({ success: true, message: `TTS engine set to ${engine}.` });
+});
+
+// Route to get the current TTS engine
+app.get("/current-tts-engine", (req: Request, res: Response): void => {
+  res.json({ success: true, engine: currentTtsEngine });
 });
 
 app.listen(port, () => {

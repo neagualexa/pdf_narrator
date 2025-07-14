@@ -1,6 +1,9 @@
 # for pyttsx3 text-to-speech (converted via ffmpeg for browser compatibility)
 pyttsx3
 
+# for Piper neural text-to-speech
+piper-tts
+
 # for WebApp
 Flask
 PyMuPDF

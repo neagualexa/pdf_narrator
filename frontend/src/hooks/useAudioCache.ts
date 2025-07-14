@@ -7,7 +7,7 @@ export function useAudioCache() {
     (
       audioCache: Map<number, AudioCacheEntry>,
       currentIndex: number,
-      maxCacheSize: number = 10,
+      maxCacheSize: number = 4,
       updateCache: (newCache: Map<number, AudioCacheEntry>) => void
     ) => {
       if (audioCache.size <= maxCacheSize) return;
@@ -25,7 +25,7 @@ export function useAudioCache() {
       for (let i = 0; i < excessCount && i < entriesByDistance.length; i++) {
         const entryIndex = entriesByDistance[i].index;
         // Don't remove the current playing sentence or immediately adjacent ones
-        if (Math.abs(entryIndex - currentIndex) > 2) {
+        if (Math.abs(entryIndex - currentIndex) > 1) {
           entriesToRemove.push(entryIndex);
         }
       }
@@ -96,10 +96,7 @@ export function useAudioCache() {
         updateCache(newCache);
 
         // Manage cache size after adding new entry (with slight delay to ensure state update)
-        setTimeout(
-          () => manageCacheSize(newCache, index, 10, updateCache),
-          100
-        );
+        setTimeout(() => manageCacheSize(newCache, index, 4, updateCache), 100);
 
         return audioUrl;
       } catch (err: any) {

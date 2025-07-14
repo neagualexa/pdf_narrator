@@ -139,6 +139,37 @@ export async function clearAudioCache(): Promise<{
 }
 
 /**
+ * Gets the current TTS engine and available engines.
+ * @returns A promise that resolves with the current TTS engine info.
+ */
+export async function getTtsEngine(): Promise<{
+  success: boolean;
+  currentEngine: string;
+  availableEngines: string[];
+}> {
+  const response = await fetch(`${API_URL}/tts-engine`);
+  return handleResponse(response);
+}
+
+/**
+ * Sets the current TTS engine.
+ * @param engine The TTS engine to use ('pyttsx3' or 'piper').
+ * @returns A promise that resolves with the update result.
+ */
+export async function setTtsEngine(engine: string): Promise<{
+  success: boolean;
+  currentEngine: string;
+  message: string;
+}> {
+  const response = await fetch(`${API_URL}/tts-engine`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ engine }),
+  });
+  return handleResponse(response);
+}
+
+/**
  * Gets the list of available TTS voices.
  * @returns A promise that resolves with the list of available voices.
  */
@@ -151,8 +182,15 @@ export async function getAvailableVoices(): Promise<{
     gender: string;
     age: string;
     index: number;
+    engine: string;
+    type: string;
   }>;
   count: number;
+  engines: {
+    pyttsx3: number;
+    piper: number;
+  };
+  currentEngine: string;
 }> {
   const response = await fetch(`${API_URL}/voices`);
   return handleResponse(response);

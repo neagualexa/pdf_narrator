@@ -40,6 +40,8 @@ export default function App() {
     selectedVoiceId,
     availableVoices,
     voicesLoading,
+    currentTtsEngine,
+    availableTtsEngines,
   } = appState;
 
   // Use ref to track current cache for cleanup without causing re-renders
@@ -302,6 +304,62 @@ export default function App() {
     }
   }, [cleanupAllCache]);
 
+  const handleTtsEngineChange = useCallback(
+    async (engine: "pyttsx3" | "piper") => {
+      try {
+        // Clear cache when switching engines
+        stableCleanupCache();
+
+        // Update the backend TTS engine
+        await api.setTtsEngine(engine);
+
+        // Update the frontend state
+        dispatchApp({ type: "SET_CURRENT_TTS_ENGINE", payload: engine });
+
+        // Clear the selected voice as it might not be available in the new engine
+        dispatchApp({ type: "SET_SELECTED_VOICE", payload: null });
+
+        // Reload voices for the new engine
+        dispatchApp({ type: "SET_VOICES_LOADING", payload: true });
+        const voicesData = await api.getAvailableVoices();
+        if (voicesData.success) {
+          dispatchApp({
+            type: "SET_AVAILABLE_VOICES",
+            payload: voicesData.voices,
+          });
+
+          // Set the first voice of the new engine as default
+          const newEngineVoices = voicesData.voices.filter(
+            (v) => v.engine === engine
+          );
+          if (newEngineVoices.length > 0) {
+            let defaultVoice = newEngineVoices[0];
+
+            // If switching to Piper, try to find Cori voice
+            if (engine === "piper") {
+              const coriVoice = newEngineVoices.find((v) =>
+                v.id.toLowerCase().includes("cori")
+              );
+              if (coriVoice) {
+                defaultVoice = coriVoice;
+              }
+            }
+
+            dispatchApp({
+              type: "SET_SELECTED_VOICE",
+              payload: defaultVoice.id,
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Error switching TTS engine:", error);
+      } finally {
+        dispatchApp({ type: "SET_VOICES_LOADING", payload: false });
+      }
+    },
+    [stableCleanupCache]
+  );
+
   // Clear cache when speech speed changes
   useEffect(() => {
     stableCleanupCache();
@@ -356,23 +414,64 @@ export default function App() {
     };
   }, [sentences.length, handleNext, handlePrevious, handlePlayPause]);
 
-  // Load available voices on component mount
+  // Load available voices and TTS engine info on component mount
   useEffect(() => {
     async function loadVoices() {
       try {
         dispatchApp({ type: "SET_VOICES_LOADING", payload: true });
+
+        // Get current TTS engine
+        const engineData = await api.getTtsEngine();
+        if (engineData.success) {
+          dispatchApp({
+            type: "SET_CURRENT_TTS_ENGINE",
+            payload: engineData.currentEngine as "pyttsx3" | "piper",
+          });
+          dispatchApp({
+            type: "SET_AVAILABLE_TTS_ENGINES",
+            payload: engineData.availableEngines,
+          });
+        }
+
+        // Get available voices
         const voicesData = await api.getAvailableVoices();
         if (voicesData.success) {
           dispatchApp({
             type: "SET_AVAILABLE_VOICES",
             payload: voicesData.voices,
           });
+
           // Set the first voice as default if none selected
           if (!selectedVoiceId && voicesData.voices.length > 0) {
-            dispatchApp({
-              type: "SET_SELECTED_VOICE",
-              payload: voicesData.voices[0].id,
-            });
+            // Find the first voice for the current engine
+            const currentEngineVoices = voicesData.voices.filter(
+              (v) => v.engine === voicesData.currentEngine
+            );
+
+            if (currentEngineVoices.length > 0) {
+              let defaultVoice = currentEngineVoices[0];
+
+              // If using Piper, try to find Cori voice
+              if (voicesData.currentEngine === "piper") {
+                const coriVoice = currentEngineVoices.find((v) =>
+                  v.id.toLowerCase().includes("cori")
+                );
+                if (coriVoice) {
+                  defaultVoice = coriVoice;
+                }
+              }
+
+              dispatchApp({
+                type: "SET_SELECTED_VOICE",
+                payload: defaultVoice.id,
+              });
+            } else {
+              // Fallback to first voice
+              dispatchApp({
+                type: "SET_SELECTED_VOICE",
+                payload: voicesData.voices[0].id,
+              });
+            }
           }
         } else {
           console.warn("Failed to load voices:", voicesData);
@@ -399,6 +498,8 @@ export default function App() {
         onSpeedChange={handleSpeedChange}
         voices={availableVoices}
         isLoading={voicesLoading}
+        currentTtsEngine={currentTtsEngine}
+        onTtsEngineChange={handleTtsEngineChange}
       />
 
       <div className="container">

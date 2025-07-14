@@ -12,11 +12,37 @@ def text_to_speech(text, speed=180):
     """
     try:
         # Initialize a new engine for each call to ensure stability
-        engine = pyttsx3.init()
+        engine = pyttsx3.init(driverName='nsss') # Use 'nsss' for macOS, 'sapi5' for Windows, etc.
         
         # Set properties if desired (optional)
         engine.setProperty('rate', speed) 
+
+        # Set the voice to a specific one if needed (optional)
+        # voices = engine.getProperty('voices')
         
+        # voice_list = []
+        # for i, voice in enumerate(voices):
+        #     voice_info = {
+        #         'id': voice.id,
+        #         'name': voice.name,
+        #         'languages': getattr(voice, 'languages', []),
+        #         'gender': getattr(voice, 'gender', 'unknown'),
+        #         'age': getattr(voice, 'age', 'unknown'),
+        #         'index': i
+        #     }
+        #     voice_list.append(voice_info)
+
+        # # find voices that have apple in their id
+        # apple_voices = []
+        # for i, voice in enumerate(voice_list):
+        #     if 'apple' in voice["id"].lower() and "en" in voice["id"].lower():
+        #         apple_voices.append(voice)
+        
+        # print(f"Found {len(apple_voices)} Apple voices: {', '.join([v["id"] for v in apple_voices])}")
+
+        # print the voice used for debugging
+        print(f"Using voice: {engine.getProperty("voice")}")    
+
         # Queue the text to be spoken
         engine.say(text)
         

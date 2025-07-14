@@ -75,7 +75,7 @@ def text_to_audio_file(text, speed=180, output_dir="audio_files", sentence_index
             import pyttsx3
             
             # Initialize TTS engine
-            engine = pyttsx3.init()
+            engine = pyttsx3.init(driverName='nsss') # Use 'nsss' for macOS, adjust as needed for other platforms
             
             # Set properties for better performance
             engine.setProperty('rate', speed)
