@@ -163,12 +163,12 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
                 <div className="voice-info">
                   <span className="voice-details">
                     <span className="voice-engine">
-                      {selectedVoice.engine === "piper" ? "Neural" : "System"} •{" "}
-                      {selectedVoice.type}
+                      {selectedVoice.engine === "piper" ? "Piper" : "System"} •{" "}
+                      {selectedVoice.type} •{" "}
                     </span>
                     {selectedVoice.languages.length > 0 && (
                       <span className="voice-language">
-                        • {selectedVoice.languages.join(", ")}
+                        {selectedVoice.languages.join(", ")}
                       </span>
                     )}
                   </span>
@@ -179,15 +179,6 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
             {/* Speed Control */}
             <div className="speed-control">
               <label htmlFor="speed-slider" className="speed-label">
-                <svg
-                  width="16"
-                  height="16"
-                  fill="currentColor"
-                  viewBox="0 0 16 16"
-                >
-                  <path d="M8 3a.5.5 0 0 1 .5.5v3.793l1.146-1.147a.5.5 0 0 1 .708.708l-2 2a.5.5 0 0 1-.708 0l-2-2a.5.5 0 1 1 .708-.708L7.5 7.293V3.5A.5.5 0 0 1 8 3z" />
-                  <path d="M3.5 9.5a.5.5 0 0 1 .5-.5h8a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-1z" />
-                </svg>
                 Speed: {Math.round(speechSpeed)}%
               </label>
               <div className="speed-controls">
