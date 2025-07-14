@@ -67,4 +67,4 @@ logs/
 *.wav
 *.flac
 */audio_files/
-*/piper_voices/
+piper_voices/
