@@ -1,3 +1,5 @@
+import React from "react";
+
 // Centralized type definitions
 export interface AudioCacheEntry {
   url: string;
@@ -93,4 +95,30 @@ export interface VoiceControlsProps {
   isLoading: boolean;
   currentTtsEngine: "pyttsx3" | "piper";
   onTtsEngineChange: (engine: "pyttsx3" | "piper") => void;
+}
+
+// Re-export StyledButton types for convenience
+export interface StyledButtonProps {
+  onClick?: () => void;
+  disabled?: boolean;
+  type?:
+    | "primary"
+    | "secondary"
+    | "help"
+    | "play-start"
+    | "play-stop"
+    | "play-loading"
+    | "control"
+    | "control-play-pause"
+    | "control-stop"
+    | "speed"
+    | "engine"
+    | "engine-active"
+    | "voice-toggle";
+  title?: string;
+  children: React.ReactNode;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
+  loading?: boolean;
+  active?: boolean;
 }

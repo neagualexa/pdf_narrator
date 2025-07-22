@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
+import StyledButton from "./StyledButton";
 
 // Use external CDN as per official instructions
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -20,130 +21,6 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
   const [baseWidth, setBaseWidth] = useState<number>(600);
   const [showHelp, setShowHelp] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  // Button style definitions
-  const buttonStyles = {
-    base: {
-      padding: "4px 8px",
-      border: "none",
-      borderRadius: "3px",
-      fontSize: "12px",
-      fontWeight: "500" as const,
-      transition: "all 0.2s ease",
-      outline: "none",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    primary: {
-      backgroundColor: "#3182ce",
-      color: "white",
-      cursor: "pointer",
-    },
-    primaryHover: {
-      backgroundColor: "#2c5aa0",
-    },
-    secondary: {
-      backgroundColor: "#38a169",
-      color: "white",
-      cursor: "pointer",
-    },
-    secondaryHover: {
-      backgroundColor: "#2f855a",
-    },
-    disabled: {
-      backgroundColor: "#e2e8f0",
-      color: "#a0aec0",
-      cursor: "not-allowed",
-    },
-    help: {
-      backgroundColor: "#f7fafc",
-      color: "#6b7280",
-      cursor: "help",
-      border: "1px solid #e2e8f0",
-      padding: "6px",
-      fontSize: "14px",
-      fontWeight: "normal" as const,
-    },
-  };
-
-  // Button component with hover effects
-  const StyledButton: React.FC<{
-    onClick?: () => void;
-    disabled?: boolean;
-    type?: "primary" | "secondary" | "help";
-    title?: string;
-    children: React.ReactNode;
-    onMouseEnter?: () => void;
-    onMouseLeave?: () => void;
-  }> = ({
-    onClick,
-    disabled = false,
-    type = "primary",
-    title,
-    children,
-    onMouseEnter,
-    onMouseLeave,
-  }) => {
-    const [isHovered, setIsHovered] = useState(false);
-
-    const getButtonStyle = (
-      buttonType: "primary" | "secondary" | "help",
-      isDisabled = false
-    ) => {
-      const base = { ...buttonStyles.base };
-
-      if (isDisabled) {
-        return { ...base, ...buttonStyles.disabled };
-      }
-
-      switch (buttonType) {
-        case "primary":
-          return { ...base, ...buttonStyles.primary };
-        case "secondary":
-          return { ...base, ...buttonStyles.secondary };
-        case "help":
-          return { ...base, ...buttonStyles.help };
-        default:
-          return { ...base, ...buttonStyles.primary };
-      }
-    };
-
-    const getHoverStyle = () => {
-      if (disabled) return {};
-
-      switch (type) {
-        case "primary":
-          return isHovered ? buttonStyles.primaryHover : {};
-        case "secondary":
-          return isHovered ? buttonStyles.secondaryHover : {};
-        default:
-          return {};
-      }
-    };
-
-    return (
-      <button
-        onClick={onClick}
-        disabled={disabled}
-        title={title}
-        onMouseEnter={() => {
-          setIsHovered(true);
-          onMouseEnter?.();
-        }}
-        onMouseLeave={() => {
-          setIsHovered(false);
-          onMouseLeave?.();
-        }}
-        style={{
-          ...getButtonStyle(type, disabled),
-          ...getHoverStyle(),
-        }}
-      >
-        {children}
-      </button>
-    );
-  };
 
   const onDocumentLoadSuccess = useCallback(
     ({ numPages }: { numPages: number }) => {

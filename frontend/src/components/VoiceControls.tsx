@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { VoiceControlsProps } from "../types";
+import StyledButton from "./StyledButton";
 
 export const VoiceControls: React.FC<VoiceControlsProps> = ({
   selectedVoiceId,
@@ -56,15 +57,15 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
     >
       {/* Collapsed state - small icon */}
       {!isExpanded && (
-        <button
-          className="voice-controls-toggle"
+        <StyledButton
+          type="voice-toggle"
           onClick={toggleExpanded}
-          aria-label="Open voice controls"
+          title="Open voice controls"
         >
           <svg width="24" height="24" fill="currentColor" viewBox="0 0 16 16">
             <path d="M2.678 11.894a1 1 0 0 1 .287.801 10.97 10.97 0 0 1-.398 2c1.395-.323 2.247-.697 2.634-.893a1 1 0 0 1 .71-.074A8.06 8.06 0 0 0 8 14c3.996 0 7-2.807 7-6 0-3.192-3.004-6-7-6S1 4.808 1 8c0 1.468.617 2.83 1.678 3.894zm-.493 3.905a21.682 21.682 0 0 1-.713.129c-.2.032-.352-.176-.273-.362a9.68 9.68 0 0 0 .244-.637l.003-.01c.248-.72.45-1.548.524-2.319C.743 11.37 0 9.76 0 8c0-3.866 3.582-7 8-7s8 3.134 8 7-3.582 7-8 7a9.06 9.06 0 0 1-2.347-.306c-.52.263-1.639.742-3.468 1.105z" />
           </svg>
-        </button>
+        </StyledButton>
       )}
 
       {/* Expanded state - full panel */}
@@ -72,10 +73,10 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
         <>
           <div className="voice-controls-header">
             <h3>Voice & Speed Controls</h3>
-            <button
-              className="voice-controls-close"
+            <StyledButton
+              type="secondary"
               onClick={toggleExpanded}
-              aria-label="Close voice controls"
+              title="Close voice controls"
             >
               <svg
                 width="16"
@@ -85,7 +86,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
               >
                 <path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854Z" />
               </svg>
-            </button>
+            </StyledButton>
           </div>
 
           <div className="voice-controls-content">
@@ -104,22 +105,22 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
                 TTS Engine
               </label>
               <div className="engine-toggle">
-                <button
-                  className={`engine-button ${
-                    currentTtsEngine === "pyttsx3" ? "active" : ""
-                  }`}
+                <StyledButton
+                  type={
+                    currentTtsEngine === "pyttsx3" ? "engine-active" : "engine"
+                  }
                   onClick={() => onTtsEngineChange("pyttsx3")}
                 >
                   System Voice
-                </button>
-                <button
-                  className={`engine-button ${
-                    currentTtsEngine === "piper" ? "active" : ""
-                  }`}
+                </StyledButton>
+                <StyledButton
+                  type={
+                    currentTtsEngine === "piper" ? "engine-active" : "engine"
+                  }
                   onClick={() => onTtsEngineChange("piper")}
                 >
                   Piper Neural
-                </button>
+                </StyledButton>
               </div>
             </div>
 
@@ -182,10 +183,10 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
                 Speed: {Math.round(speechSpeed)}%
               </label>
               <div className="speed-controls">
-                <button
+                <StyledButton
+                  type="primary"
                   onClick={() => onSpeedChange(Math.max(50, speechSpeed - 10))}
-                  className="speed-button"
-                  aria-label="Decrease speed by 10%"
+                  title="Decrease speed by 10%"
                   disabled={speechSpeed <= 50}
                 >
                   <svg
@@ -196,7 +197,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
                   >
                     <path d="M4 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 4 8z" />
                   </svg>
-                </button>
+                </StyledButton>
                 <input
                   id="speed-slider"
                   type="range"
@@ -208,10 +209,10 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
                   className="speed-slider"
                   aria-label="Speech speed"
                 />
-                <button
+                <StyledButton
+                  type="primary"
                   onClick={() => onSpeedChange(Math.min(300, speechSpeed + 10))}
-                  className="speed-button"
-                  aria-label="Increase speed by 10%"
+                  title="Increase speed by 10%"
                   disabled={speechSpeed >= 300}
                 >
                   <svg
@@ -222,7 +223,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
                   >
                     <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
                   </svg>
-                </button>
+                </StyledButton>
               </div>
             </div>
           </div>

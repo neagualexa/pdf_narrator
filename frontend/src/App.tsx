@@ -11,8 +11,9 @@ import { SentenceItem } from "./components/SentenceItem";
 import { FloatingControls } from "./components/FloatingControls";
 import { VoiceControls } from "./components/VoiceControls";
 import { PdfViewer } from "./components/PdfViewer";
+import StyledButton from "./components/StyledButton";
 import * as api from "./api";
-import "./App.css";
+import "./styles";
 
 export default function App() {
   const [appState, dispatchApp] = useReducer(appReducer, initialAppState);
@@ -542,9 +543,14 @@ export default function App() {
           <div className="main-content">
             <div className="left-column">
               <div className="upload-box">
-                <label htmlFor="file-upload" className="upload-label">
+                <StyledButton
+                  type="upload"
+                  onClick={() =>
+                    document.getElementById("file-upload")?.click()
+                  }
+                >
                   Select PDF to Upload
-                </label>
+                </StyledButton>
                 <input
                   id="file-upload"
                   type="file"

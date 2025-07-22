@@ -1,5 +1,6 @@
 import React from "react";
 import { FloatingControlsProps } from "../types";
+import StyledButton from "./StyledButton";
 
 export const FloatingControls: React.FC<FloatingControlsProps> = ({
   onPlayPause,
@@ -9,11 +10,7 @@ export const FloatingControls: React.FC<FloatingControlsProps> = ({
   isPlaying,
 }) => (
   <div className="floating-controls">
-    <button
-      onClick={onPrevious}
-      aria-label="Previous sentence"
-      className="control-button"
-    >
+    <StyledButton type="control" onClick={onPrevious} title="Previous sentence">
       <svg
         width="24"
         height="24"
@@ -28,11 +25,11 @@ export const FloatingControls: React.FC<FloatingControlsProps> = ({
           d="M11 19l-7-7 7-7m8 14l-7-7 7-7"
         />
       </svg>
-    </button>
-    <button
+    </StyledButton>
+    <StyledButton
+      type="control-play-pause"
       onClick={onPlayPause}
-      aria-label={isPlaying ? "Pause audio" : "Play audio"}
-      className="control-button play-pause-button"
+      title={isPlaying ? "Pause audio" : "Play audio"}
     >
       {isPlaying ? (
         <svg
@@ -70,22 +67,17 @@ export const FloatingControls: React.FC<FloatingControlsProps> = ({
           />
         </svg>
       )}
-    </button>
-    {/* Force stop/reset button */}
-    <button
+    </StyledButton>
+    <StyledButton
+      type="control-stop"
       onClick={onStop}
-      aria-label="Force stop all audio and reset"
-      className="control-button stop-all-button"
+      title="Force stop all audio and reset"
     >
       <svg width="24" height="24" fill="currentColor" viewBox="0 0 16 16">
         <path d="M5 3.5h6A1.5 1.5 0 0 1 12.5 5v6a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 11V5A1.5 1.5 0 0 1 5 3.5z" />
       </svg>
-    </button>
-    <button
-      onClick={onNext}
-      aria-label="Next sentence"
-      className="control-button"
-    >
+    </StyledButton>
+    <StyledButton type="control" onClick={onNext} title="Next sentence">
       <svg
         width="24"
         height="24"
@@ -100,6 +92,6 @@ export const FloatingControls: React.FC<FloatingControlsProps> = ({
           d="M13 5l7 7-7 7M5 5l7 7-7 7"
         />
       </svg>
-    </button>
+    </StyledButton>
   </div>
 );
