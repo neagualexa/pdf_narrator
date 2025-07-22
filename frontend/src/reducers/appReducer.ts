@@ -2,7 +2,7 @@ import { AppState, AppAction } from "../types";
 
 export const initialAppState: AppState = {
   sentences: [],
-  pdfPreviewUrl: null,
+  pdfFile: null,
   isLoading: false,
   error: null,
   generatingAudioIndex: null,
@@ -20,8 +20,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case "SET_SENTENCES":
       return { ...state, sentences: action.payload };
-    case "SET_PDF_PREVIEW_URL":
-      return { ...state, pdfPreviewUrl: action.payload };
+    case "SET_PDF_FILE":
+      return { ...state, pdfFile: action.payload };
     case "SET_LOADING":
       return { ...state, isLoading: action.payload };
     case "SET_ERROR":

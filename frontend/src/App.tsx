@@ -10,6 +10,7 @@ import { LoadingSpinner, ErrorMessage } from "./components/LoadingSpinner";
 import { SentenceItem } from "./components/SentenceItem";
 import { FloatingControls } from "./components/FloatingControls";
 import { VoiceControls } from "./components/VoiceControls";
+import { PdfViewer } from "./components/PdfViewer";
 import * as api from "./api";
 import "./App.css";
 
@@ -30,7 +31,7 @@ export default function App() {
 
   const {
     sentences,
-    pdfPreviewUrl,
+    pdfFile,
     isLoading,
     error,
     generatingAudioIndex,
@@ -83,12 +84,10 @@ export default function App() {
       dispatchPlayback({ type: "RESET" });
       dispatchApp({ type: "SET_SENTENCES", payload: [] });
 
-      if (pdfPreviewUrl) {
-        URL.revokeObjectURL(pdfPreviewUrl);
-      }
+      // Store the PDF file for the viewer
       dispatchApp({
-        type: "SET_PDF_PREVIEW_URL",
-        payload: URL.createObjectURL(file),
+        type: "SET_PDF_FILE",
+        payload: file,
       });
 
       try {
@@ -104,7 +103,7 @@ export default function App() {
         dispatchApp({ type: "SET_LOADING", payload: false });
       }
     },
-    [pdfPreviewUrl]
+    []
   );
 
   // Audio playback handler
@@ -592,17 +591,7 @@ export default function App() {
             </div>
             <div className="right-column">
               <div className="pdf-preview-container">
-                {pdfPreviewUrl ? (
-                  <iframe
-                    src={pdfPreviewUrl}
-                    title="PDF Preview"
-                    className="pdf-preview-iframe"
-                  ></iframe>
-                ) : (
-                  <p style={{ color: "#a0aec0" }}>
-                    PDF preview will appear here
-                  </p>
-                )}
+                <PdfViewer file={pdfFile} className="pdf-preview-iframe" />
               </div>
 
               {/* Cache Status Display */}

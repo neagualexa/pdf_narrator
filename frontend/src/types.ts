@@ -6,7 +6,7 @@ export interface AudioCacheEntry {
 
 export interface AppState {
   sentences: string[];
-  pdfPreviewUrl: string | null;
+  pdfFile: File | null;
   isLoading: boolean;
   error: string | null;
   generatingAudioIndex: number | null;
@@ -33,7 +33,7 @@ export type PlaybackAction =
 
 export type AppAction =
   | { type: "SET_SENTENCES"; payload: string[] }
-  | { type: "SET_PDF_PREVIEW_URL"; payload: string | null }
+  | { type: "SET_PDF_FILE"; payload: File | null }
   | { type: "SET_LOADING"; payload: boolean }
   | { type: "SET_ERROR"; payload: string | null }
   | { type: "SET_GENERATING_AUDIO_INDEX"; payload: number | null }
