@@ -151,6 +151,9 @@ body {
   max-height: 60vh;
   overflow-y: auto;
   padding-right: 1rem;
+  scroll-behavior: smooth;
+  scroll-padding-top: 2rem;
+  scroll-padding-bottom: 2rem;
 }
 
 .sentence-item {
@@ -173,6 +176,8 @@ body {
     0 4px 6px -2px rgba(66, 153, 225, 0.1);
   transform: translateY(-2px);
   animation: border-glow 3s ease-in-out infinite alternate;
+  position: relative;
+  z-index: 1;
 }
 
 .sentence-item.playing .sentence-text {

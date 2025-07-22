@@ -48,6 +48,28 @@ export default function App() {
   const audioCacheRef = useRef(audioCache);
   audioCacheRef.current = audioCache;
 
+  // Ref for the sentence list container to enable auto-scrolling
+  const sentenceListRef = useRef<HTMLDivElement>(null);
+
+  // Function to scroll the currently playing sentence to the center of the view
+  const scrollToSentence = useCallback((index: number) => {
+    if (!sentenceListRef.current) return;
+
+    // Find the sentence element by its data attribute
+    const sentenceElement = sentenceListRef.current.querySelector(
+      `[data-sentence-index="${index}"]`
+    ) as HTMLElement;
+
+    if (!sentenceElement) return;
+
+    // Use scrollIntoView with block: 'center' for proper centering within the container
+    sentenceElement.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+      inline: "nearest",
+    });
+  }, []);
+
   // File upload handler
   const handleFileUpload = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -486,6 +508,18 @@ export default function App() {
     loadVoices();
   }, [selectedVoiceId]);
 
+  // Auto-scroll to the currently playing sentence
+  useEffect(() => {
+    if (playbackState.status === "playing" && playbackState.currentIndex >= 0) {
+      // Add a small delay to ensure the DOM has updated with the new playing state
+      const timeoutId = setTimeout(() => {
+        scrollToSentence(playbackState.currentIndex);
+      }, 100);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [playbackState.status, playbackState.currentIndex, scrollToSentence]);
+
   return (
     <div className="app-wrapper">
       {isLoading && <LoadingSpinner />}
@@ -505,7 +539,6 @@ export default function App() {
       <div className="container">
         <div className="card">
           <h1 className="title">PDF to Audio Converter</h1>
-          <p className="subtitle">Built with React, Node.js, and Python</p>
 
           <div className="main-content">
             <div className="left-column">
@@ -530,7 +563,7 @@ export default function App() {
               {sentences.length > 0 && (
                 <div id="results-container">
                   <h2 className="results-title">Extracted Sentences</h2>
-                  <div className="sentence-list">
+                  <div className="sentence-list" ref={sentenceListRef}>
                     {sentences.map((sentence, index) => (
                       <SentenceItem
                         key={index}
@@ -600,7 +633,10 @@ export default function App() {
           />
         )}
         <footer className="footer">
-          <p>React Frontend | Node.js Backend | Python TTS Engine</p>
+          <p>
+            React Frontend | Node.js & Python Backend | TTS Engine | Created
+            with Claude Sonnet 4
+          </p>
         </footer>
       </div>
     </div>

@@ -14,6 +14,7 @@ export const SentenceItem: React.FC<SentenceItemProps> = ({
     className={`sentence-item ${
       isPlaying ? "playing" : isLastPlayed ? "last-played" : ""
     } ${isGeneratingAudio ? "generating" : ""}`}
+    data-sentence-index={index}
   >
     <p className="sentence-text">{sentence}</p>
     <button
