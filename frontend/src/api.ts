@@ -139,6 +139,26 @@ export async function clearAudioCache(): Promise<{
 }
 
 /**
+ * Cleans up distant audio files from the backend based on current sentence index.
+ * @param currentSentenceIndex The current sentence index to keep nearby files.
+ */
+export async function cleanupDistantAudio(
+  currentSentenceIndex: number
+): Promise<{
+  success: boolean;
+  deletedCount: number;
+  deletedFiles: string[];
+  message: string;
+}> {
+  const response = await fetch(`${API_URL}/cleanup-distant-audio`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ currentSentenceIndex }),
+  });
+  return handleResponse(response);
+}
+
+/**
  * Gets the current TTS engine and available engines.
  * @returns A promise that resolves with the current TTS engine info.
  */

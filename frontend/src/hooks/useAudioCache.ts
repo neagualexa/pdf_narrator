@@ -7,7 +7,7 @@ export function useAudioCache() {
     (
       audioCache: Map<number, AudioCacheEntry>,
       currentIndex: number,
-      maxCacheSize: number = 4,
+      maxCacheSize: number = 3,
       updateCache: (newCache: Map<number, AudioCacheEntry>) => void
     ) => {
       if (audioCache.size <= maxCacheSize) return;
@@ -96,7 +96,7 @@ export function useAudioCache() {
         updateCache(newCache);
 
         // Manage cache size after adding new entry (with slight delay to ensure state update)
-        setTimeout(() => manageCacheSize(newCache, index, 4, updateCache), 100);
+        setTimeout(() => manageCacheSize(newCache, index, 3, updateCache), 100);
 
         return audioUrl;
       } catch (err: any) {

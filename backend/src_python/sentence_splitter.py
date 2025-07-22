@@ -3,7 +3,8 @@ import nltk
 import json
 import re
 import signal
-from typing import List
+import os
+from typing import List, Dict, Any
 
 # Global flag for graceful shutdown
 shutdown_requested = False
@@ -19,9 +20,106 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 
+def load_vocabulary_config() -> Dict[str, Any]:
+    """
+    Load vocabulary configuration from JSON file.
+    Returns default config if file doesn't exist or can't be loaded.
+    """
+    config_path = os.path.join(os.path.dirname(__file__), 'vocabulary_config.json')
+    
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        # Return minimal default config if file is missing or invalid
+        return {
+            "pronunciation_rules": {
+                "spell_out": ["ITS", "API", "URL", "HTML", "CSS"]
+            },
+            "word_replacements": {
+                "e.g.": "for example",
+                "i.e.": "that is",
+                "etc.": "etcetera",
+                "&": "and"
+            }
+        }
+
+def apply_vocabulary_rules(text: str, config: Dict[str, Any]) -> str:
+    """
+    Apply vocabulary pronunciation rules and word replacements to text.
+    """
+    global shutdown_requested
+    if shutdown_requested:
+        return text
+    
+    # Apply word replacements first
+    replacements = config.get("word_replacements", {})
+    for original, replacement in replacements.items():
+        if shutdown_requested:
+            break
+        
+        # Handle different types of replacements
+        if any(char in original for char in '.,;:!?'):
+            # Punctuation-containing words (e.g., "e.g.", "i.e.")
+            pattern = re.compile(re.escape(original), re.IGNORECASE)
+        elif original in ['&', '@', '#', '%', '$', '€', '£', '¥']:
+            # Symbols that should be standalone (surrounded by whitespace or word boundaries)
+            pattern = re.compile(r'(?<!\S)' + re.escape(original) + r'(?!\S)', re.IGNORECASE)
+        else:
+            # Regular words - use word boundaries
+            pattern = re.compile(r'\b' + re.escape(original) + r'\b', re.IGNORECASE)
+        
+        text = pattern.sub(replacement, text)
+    
+    # Apply pronunciation rules
+    pronunciation_rules = config.get("pronunciation_rules", {})
+    
+    # Handle spell-out words (add spaces between letters)
+    spell_out_words = pronunciation_rules.get("spell_out", [])
+    for word in spell_out_words:
+        if shutdown_requested:
+            break
+        # Match the word with word boundaries
+        pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
+        # Replace with spaced letters (e.g., "ITS" -> "I T S")
+        spaced_word = ' '.join(word.upper())
+        text = pattern.sub(spaced_word, text)
+    
+    return text
+
+def fix_hyphenated_line_breaks(text: str) -> str:
+    """
+    Fix hyphenated words that are broken across lines in PDF text.
+    Converts patterns like "author- ing" back to "authoring".
+    """
+    global shutdown_requested
+    if shutdown_requested:
+        return text
+    
+    # Pattern to match hyphenated line breaks:
+    # - word ending with hyphen and optional whitespace
+    # - followed by newline or multiple spaces
+    # - followed by word continuation (lowercase letter or common word parts)
+    patterns = [
+        # Basic pattern: "word-\ning" -> "wording"
+        re.compile(r'(\w+)-\s*\n\s*([a-z]+)', re.MULTILINE),
+        # Pattern with multiple spaces instead of newline: "word- ing" -> "wording"
+        re.compile(r'(\w+)-\s{2,}([a-z]+)'),
+        # Pattern for hyphen followed by whitespace and lowercase: "word- ing" -> "wording"
+        re.compile(r'(\w+)-\s+([a-z]{2,})'),
+    ]
+    
+    for pattern in patterns:
+        if shutdown_requested:
+            break
+        # Replace hyphenated breaks with joined words
+        text = pattern.sub(r'\1\2', text)
+    
+    return text
+
 def filter_harvard_citations_and_references(text: str) -> str:
     """
-    Remove Harvard citations and reference sections from text.
+    Remove Harvard citations, Vancouver citations, and reference sections from text.
     Optimized with compiled regex patterns for better performance.
     """
     global shutdown_requested
@@ -36,6 +134,14 @@ def filter_harvard_citations_and_references(text: str) -> str:
         re.compile(r'\([^()]*\b(?:19|20)\d{2}[^()]*[p\.:]?\s*\d+[^()]*\)'),
         # Remove standalone citations at the end of sentences
         re.compile(r'\s*\([^()]*\b(?:19|20)\d{2}[^()]*\)\s*\.'),
+        # Remove Vancouver citations (numbered references in square brackets)
+        re.compile(r'\[\s*\d+(?:\s*,\s*\d+)*\s*\]'),
+        # Remove single Vancouver citations
+        re.compile(r'\[\s*\d+\s*\]'),
+        # Remove Vancouver citation ranges
+        re.compile(r'\[\s*\d+\s*-\s*\d+\s*\]'),
+        # Remove complex Vancouver citations with multiple formats
+        re.compile(r'\[\s*\d+(?:\s*[-,]\s*\d+)*\s*\]'),
         # Remove "et al." references
         re.compile(r'\bet\s+al\.?\b'),
         # Remove ibid references
@@ -103,13 +209,17 @@ def filter_reference_sections(sentences: List[str]) -> List[str]:
 
 def split_text_into_sentences(text: str) -> None:
     """
-    Uses NLTK to split a block of text into sentences, filters out Harvard citations
-    and references, and prints them as a JSON array to standard output.
+    Uses NLTK to split a block of text into sentences, fixes hyphenated line breaks,
+    applies vocabulary pronunciation rules, filters out Harvard citations and Vancouver 
+    citations, and prints them as a JSON array to standard output. 
     Optimized for better performance and error handling.
     """
     global shutdown_requested
     
     try:
+        # Load vocabulary configuration
+        vocab_config = load_vocabulary_config()
+        
         # Ensure the 'punkt' tokenizer is available
         try:
             nltk.data.find('tokenizers/punkt')
@@ -121,7 +231,21 @@ def split_text_into_sentences(text: str) -> None:
             print(json.dumps([]))
             return
 
-        # First, filter out Harvard citations from the entire text
+        # First, fix hyphenated line breaks from PDF text
+        text = fix_hyphenated_line_breaks(text)
+        
+        if shutdown_requested:
+            print(json.dumps([]))
+            return
+
+        # Apply vocabulary pronunciation rules and replacements
+        text = apply_vocabulary_rules(text, vocab_config)
+        
+        if shutdown_requested:
+            print(json.dumps([]))
+            return
+
+        # Then, filter out Harvard and Vancouver citations from the entire text
         filtered_text = filter_harvard_citations_and_references(text)
         
         if shutdown_requested:
