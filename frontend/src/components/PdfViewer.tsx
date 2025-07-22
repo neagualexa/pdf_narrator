@@ -21,6 +21,130 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
   const [showHelp, setShowHelp] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Button style definitions
+  const buttonStyles = {
+    base: {
+      padding: "4px 8px",
+      border: "none",
+      borderRadius: "3px",
+      fontSize: "12px",
+      fontWeight: "500" as const,
+      transition: "all 0.2s ease",
+      outline: "none",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    primary: {
+      backgroundColor: "#3182ce",
+      color: "white",
+      cursor: "pointer",
+    },
+    primaryHover: {
+      backgroundColor: "#2c5aa0",
+    },
+    secondary: {
+      backgroundColor: "#38a169",
+      color: "white",
+      cursor: "pointer",
+    },
+    secondaryHover: {
+      backgroundColor: "#2f855a",
+    },
+    disabled: {
+      backgroundColor: "#e2e8f0",
+      color: "#a0aec0",
+      cursor: "not-allowed",
+    },
+    help: {
+      backgroundColor: "#f7fafc",
+      color: "#6b7280",
+      cursor: "help",
+      border: "1px solid #e2e8f0",
+      padding: "6px",
+      fontSize: "14px",
+      fontWeight: "normal" as const,
+    },
+  };
+
+  // Button component with hover effects
+  const StyledButton: React.FC<{
+    onClick?: () => void;
+    disabled?: boolean;
+    type?: "primary" | "secondary" | "help";
+    title?: string;
+    children: React.ReactNode;
+    onMouseEnter?: () => void;
+    onMouseLeave?: () => void;
+  }> = ({
+    onClick,
+    disabled = false,
+    type = "primary",
+    title,
+    children,
+    onMouseEnter,
+    onMouseLeave,
+  }) => {
+    const [isHovered, setIsHovered] = useState(false);
+
+    const getButtonStyle = (
+      buttonType: "primary" | "secondary" | "help",
+      isDisabled = false
+    ) => {
+      const base = { ...buttonStyles.base };
+
+      if (isDisabled) {
+        return { ...base, ...buttonStyles.disabled };
+      }
+
+      switch (buttonType) {
+        case "primary":
+          return { ...base, ...buttonStyles.primary };
+        case "secondary":
+          return { ...base, ...buttonStyles.secondary };
+        case "help":
+          return { ...base, ...buttonStyles.help };
+        default:
+          return { ...base, ...buttonStyles.primary };
+      }
+    };
+
+    const getHoverStyle = () => {
+      if (disabled) return {};
+
+      switch (type) {
+        case "primary":
+          return isHovered ? buttonStyles.primaryHover : {};
+        case "secondary":
+          return isHovered ? buttonStyles.secondaryHover : {};
+        default:
+          return {};
+      }
+    };
+
+    return (
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        title={title}
+        onMouseEnter={() => {
+          setIsHovered(true);
+          onMouseEnter?.();
+        }}
+        onMouseLeave={() => {
+          setIsHovered(false);
+          onMouseLeave?.();
+        }}
+        style={{
+          ...getButtonStyle(type, disabled),
+          ...getHoverStyle(),
+        }}
+      >
+        {children}
+      </button>
+    );
+  };
+
   const onDocumentLoadSuccess = useCallback(
     ({ numPages }: { numPages: number }) => {
       setNumPages(numPages);
@@ -214,22 +338,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
         >
           {/* Zoom Controls */}
           <div style={{ display: "flex", gap: "5px", alignItems: "center" }}>
-            <button
+            <StyledButton
               onClick={zoomOut}
               disabled={scale <= 0.5}
-              style={{
-                padding: "4px 8px",
-                backgroundColor: scale <= 0.5 ? "#e2e8f0" : "#3182ce",
-                color: scale <= 0.5 ? "#a0aec0" : "white",
-                border: "none",
-                borderRadius: "3px",
-                cursor: scale <= 0.5 ? "not-allowed" : "pointer",
-                fontSize: "12px",
-              }}
+              type="primary"
               title="Zoom Out (Ctrl + -)"
             >
               -
-            </button>
+            </StyledButton>
 
             <span
               style={{
@@ -237,45 +353,30 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
                 color: "#4a5568",
                 display: "flex",
                 alignItems: "center",
-                minWidth: "40px",
+                minWidth: "50px",
                 justifyContent: "center",
+                fontWeight: "500",
               }}
             >
               {Math.round(scale * 100)}%
             </span>
 
-            <button
+            <StyledButton
               onClick={zoomIn}
               disabled={scale >= 3.0}
-              style={{
-                padding: "4px 8px",
-                backgroundColor: scale >= 3.0 ? "#e2e8f0" : "#3182ce",
-                color: scale >= 3.0 ? "#a0aec0" : "white",
-                border: "none",
-                borderRadius: "3px",
-                cursor: scale >= 3.0 ? "not-allowed" : "pointer",
-                fontSize: "12px",
-              }}
+              type="primary"
               title="Zoom In (Ctrl + +)"
             >
               +
-            </button>
+            </StyledButton>
 
-            <button
+            <StyledButton
               onClick={resetZoom}
-              style={{
-                padding: "4px 8px",
-                backgroundColor: "#38a169",
-                color: "white",
-                border: "none",
-                borderRadius: "3px",
-                cursor: "pointer",
-                fontSize: "12px",
-              }}
+              type="secondary"
               title="Reset Zoom (Ctrl + 0)"
             >
               Reset
-            </button>
+            </StyledButton>
           </div>
 
           {/* Divider */}
@@ -288,22 +389,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
           />
 
           {/* Page Navigation */}
-          <button
+          <StyledButton
             onClick={goToPrevPage}
             disabled={pageNumber <= 1}
-            style={{
-              padding: "8px 12px",
-              backgroundColor: pageNumber <= 1 ? "#e2e8f0" : "#3182ce",
-              color: pageNumber <= 1 ? "#a0aec0" : "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: pageNumber <= 1 ? "not-allowed" : "pointer",
-              fontSize: "14px",
-            }}
+            type="primary"
             title="Previous Page"
           >
-            ← Previous
-          </button>
+            ←
+          </StyledButton>
 
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <span
@@ -313,22 +406,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
             </span>
           </div>
 
-          <button
+          <StyledButton
             onClick={goToNextPage}
             disabled={pageNumber >= numPages}
-            style={{
-              padding: "8px 12px",
-              backgroundColor: pageNumber >= numPages ? "#e2e8f0" : "#3182ce",
-              color: pageNumber >= numPages ? "#a0aec0" : "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: pageNumber >= numPages ? "not-allowed" : "pointer",
-              fontSize: "14px",
-            }}
+            type="primary"
             title="Next Page"
           >
-            Next →
-          </button>
+            →
+          </StyledButton>
 
           {/* Divider */}
           <div
@@ -341,26 +426,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
 
           {/* Help Button */}
           <div style={{ position: "relative" }}>
-            <span
-              style={{
-                fontSize: "14px",
-                cursor: "help",
-                padding: "6px",
-                borderRadius: "4px",
-                backgroundColor: "#f7fafc",
-                color: "#6b7280",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                transition: "all 0.2s ease",
-                border: "1px solid #e2e8f0",
-              }}
+            <StyledButton
+              type="help"
               onMouseEnter={() => setShowHelp(true)}
               onMouseLeave={() => setShowHelp(false)}
               title="Show controls help"
             >
               ?
-            </span>
+            </StyledButton>
 
             {/* Help Content */}
             {showHelp && (
