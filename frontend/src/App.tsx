@@ -382,6 +382,10 @@ export default function App() {
     [stableCleanupCache]
   );
 
+  const handleDismissError = useCallback(() => {
+    dispatchApp({ type: "SET_ERROR", payload: null });
+  }, []);
+
   // Clear cache when speech speed changes
   useEffect(() => {
     stableCleanupCache();
@@ -614,7 +618,9 @@ export default function App() {
                 </div>
               </div>
 
-              {error && <ErrorMessage message={error} />}
+              {error && (
+                <ErrorMessage message={error} onDismiss={handleDismissError} />
+              )}
             </div>
           </div>
         </div>

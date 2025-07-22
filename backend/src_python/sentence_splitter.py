@@ -134,7 +134,7 @@ def filter_harvard_citations_and_references(text: str) -> str:
         re.compile(r'\([^()]*\b(?:19|20)\d{2}[^()]*[p\.:]?\s*\d+[^()]*\)'),
         # Remove standalone citations at the end of sentences
         re.compile(r'\s*\([^()]*\b(?:19|20)\d{2}[^()]*\)\s*\.'),
-        # Remove Vancouver citations (numbered references in square brackets)
+        # Remove Vancouver citations (numbered references in square brackets) but keep author names
         re.compile(r'\[\s*\d+(?:\s*,\s*\d+)*\s*\]'),
         # Remove single Vancouver citations
         re.compile(r'\[\s*\d+\s*\]'),
@@ -142,8 +142,6 @@ def filter_harvard_citations_and_references(text: str) -> str:
         re.compile(r'\[\s*\d+\s*-\s*\d+\s*\]'),
         # Remove complex Vancouver citations with multiple formats
         re.compile(r'\[\s*\d+(?:\s*[-,]\s*\d+)*\s*\]'),
-        # Remove "et al." references
-        re.compile(r'\bet\s+al\.?\b'),
         # Remove ibid references
         re.compile(r'\bibid\.?\b', re.IGNORECASE),
         # Remove "According to [Author]" patterns
@@ -156,6 +154,15 @@ def filter_harvard_citations_and_references(text: str) -> str:
             break
         text = pattern.sub('', text)
     
+    # Clean up punctuation and formatting issues after citation removal
+    # Fix double commas and spaces
+    text = re.sub(r'\s*,\s*,', ',', text)
+    # Remove leading commas and spaces
+    text = re.sub(r'^\s*,\s*', '', text)
+    # Remove trailing commas before periods
+    text = re.sub(r',\s*\.', '.', text)
+    # Fix spacing around commas after removing citations
+    text = re.sub(r'\s*,\s+', ', ', text)
     # Clean up extra whitespace
     text = re.sub(r'\s+', ' ', text).strip()
     
