@@ -128,24 +128,12 @@ def filter_harvard_citations_and_references(text: str) -> str:
     
     # Compile regex patterns for better performance
     patterns = [
-        # Remove in-text Harvard citations (Author, Year) or (Author Year)
+        # Remove Harvard citations (Author, Year) - covers all parenthetical citations with years
         re.compile(r'\([^()]*\b(?:19|20)\d{2}[^()]*\)'),
-        # Remove citations with page numbers
-        re.compile(r'\([^()]*\b(?:19|20)\d{2}[^()]*[p\.:]?\s*\d+[^()]*\)'),
-        # Remove standalone citations at the end of sentences
-        re.compile(r'\s*\([^()]*\b(?:19|20)\d{2}[^()]*\)\s*\.'),
-        # Remove Vancouver citations (numbered references in square brackets) but keep author names
-        re.compile(r'\[\s*\d+(?:\s*,\s*\d+)*\s*\]'),
-        # Remove single Vancouver citations
-        re.compile(r'\[\s*\d+\s*\]'),
-        # Remove Vancouver citation ranges
-        re.compile(r'\[\s*\d+\s*-\s*\d+\s*\]'),
-        # Remove complex Vancouver citations with multiple formats
+        # Remove Vancouver citations [1] or [1,2,3]
         re.compile(r'\[\s*\d+(?:\s*[-,]\s*\d+)*\s*\]'),
         # Remove ibid references
         re.compile(r'\bibid\.?\b', re.IGNORECASE),
-        # Remove "According to [Author]" patterns
-        re.compile(r'According to [^,.()]*\([^()]*\b(?:19|20)\d{2}[^()]*\)', re.IGNORECASE),
     ]
     
     # Apply all patterns
