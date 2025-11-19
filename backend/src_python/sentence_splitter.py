@@ -74,14 +74,15 @@ def apply_vocabulary_rules(text: str, config: Dict[str, Any]) -> str:
     # Apply pronunciation rules
     pronunciation_rules = config.get("pronunciation_rules", {})
     
-    # Handle spell-out words (add spaces between letters)
+    # Handle spell-out words (add spaces between letters).
+    # Matching is case-sensitive: only exact-case occurrences are spelled out.
     spell_out_words = pronunciation_rules.get("spell_out", [])
     for word in spell_out_words:
         if shutdown_requested:
             break
-        # Match the word with word boundaries
-        pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
-        # Replace with spaced letters (e.g., "ITS" -> "I T S")
+        # Compile a case-sensitive pattern so only exact-case matches are changed.
+        pattern = re.compile(r'\b' + re.escape(word) + r'\b')
+        # Replace with spaced letters (e.g., "ITS" -> "I T S"). Always output uppercase letters.
         spaced_word = ' '.join(word.upper())
         text = pattern.sub(spaced_word, text)
     
