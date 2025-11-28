@@ -1,9 +1,57 @@
-# pdf_narrator
-some vibe coding narrator of pdfs (python tts, node.js, react)
+# PDF Narrator
+Text-to-Speech synthesizer for PDFs (python tts, node.js, react) (Vibe coding project assisted by Claude Sonnet 4)
 
-using Gemini-2.5-pro
+<figure align="center">
+  <img src="misc/PDF_narrator_screenshot.png" alt="Preview of PDF Narrator Webapp" />
+  <figcaption><em>PDF Narrator web interface</em></figcaption>
+</figure>
 
-## Setup
+## Features
+
+### Core Functionality
+- **PDF Text Extraction**: Upload PDF files and automatically extract text content using `pdf-parse`
+- **Intelligent Sentence Splitting**: Smart sentence detection and splitting using NLTK for natural speech flow
+- **Dual TTS Engines**: 
+  - **Pyttsx3**: System-integrated TTS with platform-native voices
+  - **Piper**: High-quality neural TTS with multiple voice models (Cori, Aru, Lessac, Ryan)
+- **Real-time Audio Generation**: On-demand audio synthesis with intelligent caching
+
+### User Interface & Controls
+- **PDF Viewer**: Integrated PDF preview alongside sentence list
+- **Interactive Sentence List**: Click any sentence to play, with visual indicators for current/playing sentences
+- **Floating Media Controls**: Play/pause, next/previous, stop with keyboard shortcuts (spacebar, arrow keys)
+- **Voice Customization**: 
+  - Multiple voice selection (British/American accents, male/female voices)
+  - Adjustable speech speed (50-300 WPM)
+  - TTS engine switching (Pyttsx3 ↔ Piper)
+- **Continuous Playback**: Auto-play through entire document or manual sentence navigation
+
+### Advanced Features
+- **Smart Audio Caching**: 
+  - Intelligent preloading of adjacent sentences for seamless playback
+  - Automatic cleanup of distant audio files to manage storage
+  - Cache status monitoring
+
+## Quick Start
+
+The easiest way to set up and run the PDF Narrator application is using the automated setup script:
+
+```bash
+chmod +x ./run.sh  # Make the script executable
+./run.sh           # Setup dependencies and start both frontend and backend
+```
+
+This script will:
+- Create a Python virtual environment (if needed)
+- Install all Node.js dependencies for frontend and backend
+- Install Python dependencies for TTS functionality
+- Start both the backend server (port 3001) and frontend (port 3000)
+
+The frontend will automatically open in your browser at `http://localhost:3000` and will proxy API requests to the backend at `http://localhost:3001`.
+
+## Manual Setup (Alternative)
+
+If you prefer to set up the components individually:
 
 ### Backend Setup
 1. Navigate to the backend directory:
@@ -21,11 +69,6 @@ using Gemini-2.5-pro
    pip install -r requirements.txt
    ```
 
-4. Install TypeScript and nodemon globally (if not already installed):
-   ```bash
-   npm install -g typescript ts-node nodemon
-   ```
-
 ### Frontend Setup
 1. Navigate to the frontend directory:
    ```bash
@@ -37,34 +80,14 @@ using Gemini-2.5-pro
    npm install
    ```
 
-## Running the Application
-
-### Quick Start Commands
-
-**Backend Server:**
+### Manual Development Mode
+Start the backend server (runs on port 3001):
 ```bash
 cd backend && npm run dev
 ```
 
-**Frontend Development Server:**
+In a new terminal, start the frontend (runs on port 3000):
 ```bash
 cd frontend && npm start
-```
-
-### Development Mode
-1. Start the backend server (runs on port 3001):
-   ```bash
-   cd backend
-   npm run dev
-   ```
-> npm scripts saved in package.json
-
-2. In a new terminal, start the frontend (runs on port 3000):
-   ```bash
-   cd frontend
-   npm start
-   ```
-> npm scripts saved in package.json
-
-The frontend will automatically open in your browser at `http://localhost:3000` and will proxy API requests to the backend at `http://localhost:3001`. 
+``` 
 
