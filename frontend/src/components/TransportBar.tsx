@@ -1,15 +1,16 @@
 import React from "react";
-import { FloatingControlsProps } from "../types";
+import { TransportBarProps } from "../types";
 import StyledButton from "./StyledButton";
 
-export const FloatingControls: React.FC<FloatingControlsProps> = ({
+export const TransportBar: React.FC<TransportBarProps> = ({
   onPlayPause,
   onNext,
   onPrevious,
   onStop,
   isPlaying,
+  cachedCount,
 }) => (
-  <div className="floating-controls">
+  <div className="transport-bar">
     <StyledButton type="control" onClick={onPrevious} title="Previous sentence">
       <svg
         width="24"
@@ -93,5 +94,10 @@ export const FloatingControls: React.FC<FloatingControlsProps> = ({
         />
       </svg>
     </StyledButton>
+
+    <div className="transport-status" title="Sentences with audio ready to play">
+      <span className={`buffer-dot ${cachedCount > 0 ? "buffered" : ""}`} />
+      {cachedCount > 0 ? `${cachedCount} buffered` : "Nothing buffered"}
+    </div>
   </div>
 );

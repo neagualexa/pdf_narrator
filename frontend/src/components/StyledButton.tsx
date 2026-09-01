@@ -12,6 +12,7 @@ import { colors, gradients, shadows } from "../styles/colors";
  * Types available:
  * - "primary", "secondary", "help" - General purpose buttons for UI actions
  * - "upload" - Large, prominent button for file uploads
+ * - "toolbar" - Compact labelled button for the app bar
  * - "play-start", "play-stop", "play-loading" - Circular play buttons for sentence items
  * - "control", "control-play-pause", "control-stop" - Floating control buttons
  * - "engine", "engine-active" - Toggle buttons for engine selection
@@ -32,6 +33,7 @@ export interface StyledButtonProps {
     | "secondary"
     | "help"
     | "upload"
+    | "toolbar"
     | "play-start"
     | "play-stop"
     | "play-loading"
@@ -120,6 +122,29 @@ const StyledButton: React.FC<StyledButtonProps> = ({
       backgroundColor: colors.teal[800], // Darker hover state (teal-800)
       transform: "scale(1.05)",
       boxShadow: shadows.teal.md,
+    },
+
+    // Toolbar button styles (compact, labelled - app bar)
+    toolbar: {
+      padding: "0.5rem 0.875rem",
+      borderRadius: "8px",
+      fontSize: "0.8125rem",
+      fontWeight: "600" as const,
+      backgroundColor: "transparent",
+      color: colors.teal[700],
+      border: `1px solid ${colors.teal[200]}`,
+      cursor: "pointer",
+      gap: "0.4rem",
+      whiteSpace: "nowrap" as const,
+    },
+    toolbarHover: {
+      backgroundColor: colors.teal[50],
+      borderColor: colors.teal[500],
+    },
+    toolbarActive: {
+      backgroundColor: colors.teal[600],
+      borderColor: colors.teal[600],
+      color: "white",
     },
 
     // Play button styles (circular, for sentence items)
@@ -289,6 +314,14 @@ const StyledButton: React.FC<StyledButtonProps> = ({
         return { ...buttonStyles.base, ...buttonStyles.help };
       case "upload":
         return { ...buttonStyles.base, ...buttonStyles.upload };
+      case "toolbar":
+        return isActive
+          ? {
+              ...buttonStyles.base,
+              ...buttonStyles.toolbar,
+              ...buttonStyles.toolbarActive,
+            }
+          : { ...buttonStyles.base, ...buttonStyles.toolbar };
 
       case "play-start":
         return { ...buttonStyles.playBase, ...buttonStyles.playStart };
@@ -333,6 +366,8 @@ const StyledButton: React.FC<StyledButtonProps> = ({
         return isHovered ? buttonStyles.secondaryHover : {};
       case "upload":
         return isHovered ? buttonStyles.uploadHover : {};
+      case "toolbar":
+        return isHovered && !active ? buttonStyles.toolbarHover : {};
 
       case "play-start":
         return isHovered ? buttonStyles.playStartHover : {};

@@ -62,12 +62,14 @@ export interface SentenceItemProps {
   isGeneratingAudio: boolean;
 }
 
-export interface FloatingControlsProps {
+export interface TransportBarProps {
   onPlayPause: () => void;
   onNext: () => void;
   onPrevious: () => void;
   onStop: () => void;
   isPlaying: boolean;
+  /** Sentences with audio already generated - drives the buffering indicator. */
+  cachedCount: number;
 }
 
 export interface ErrorMessageProps {

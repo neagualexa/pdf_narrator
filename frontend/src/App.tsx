@@ -9,7 +9,7 @@ import { useAudioCache, LOOKAHEAD } from "./hooks/useAudioCache";
 import { AudioCacheEntry, PlaybackAction } from "./types";
 import { LoadingSpinner, ErrorMessage } from "./components/LoadingSpinner";
 import { SentenceItem } from "./components/SentenceItem";
-import { FloatingControls } from "./components/FloatingControls";
+import { TransportBar } from "./components/TransportBar";
 import { VoiceControls } from "./components/VoiceControls";
 import { PdfViewer } from "./components/PdfViewer";
 import StyledButton from "./components/StyledButton";
@@ -567,121 +567,141 @@ export default function App() {
     }
   }, [playbackState.status, playbackState.currentIndex, scrollToSentence]);
 
+  const hasDocument = sentences.length > 0;
+
+  const triggerFilePicker = useCallback(() => {
+    document.getElementById("file-upload")?.click();
+  }, []);
+
+  const fileInput = (
+    <input
+      id="file-upload"
+      type="file"
+      name="file"
+      accept="application/pdf"
+      required
+      onChange={handleFileUpload}
+      style={{ display: "none" }}
+    />
+  );
+
   return (
-    <div className="app-wrapper">
+    <div className="app-shell">
       {isLoading && <LoadingSpinner />}
+      {error && <ErrorMessage message={error} onDismiss={handleDismissError} />}
+      {fileInput}
 
-      {/* Voice Controls Panel */}
-      <VoiceControls
-        selectedVoiceId={selectedVoiceId}
-        onVoiceChange={handleVoiceChange}
-        speechSpeed={speechSpeed}
-        onSpeedChange={handleSpeedChange}
-        voices={availableVoices}
-        isLoading={voicesLoading}
-        currentTtsEngine={currentTtsEngine}
-        onTtsEngineChange={handleTtsEngineChange}
-      />
+      <header className="app-bar">
+        <h1 className="app-bar-title">PDF to Audio Converter</h1>
 
-      <div className="container">
-        <div className="card">
-          <h1 className="title">PDF to Audio Converter</h1>
+        {pdfFile && (
+          <span className="app-bar-file" title={pdfFile.name}>
+            <svg
+              width="13"
+              height="13"
+              fill="currentColor"
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            >
+              <path d="M4 0h5.293A1 1 0 0 1 10 .293L13.707 4a1 1 0 0 1 .293.707V14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2zm5.5 1.5v2a1 1 0 0 0 1 1h2l-3-3z" />
+            </svg>
+            <span className="app-bar-file-name">{pdfFile.name}</span>
+          </span>
+        )}
 
-          <div className="main-content">
-            <div className="left-column">
+        <div className="app-bar-spacer" />
+
+        <div className="app-bar-actions">
+          {hasDocument && (
+            <StyledButton
+              type="toolbar"
+              onClick={triggerFilePicker}
+              title="Load a different PDF"
+            >
+              Replace PDF
+            </StyledButton>
+          )}
+          <VoiceControls
+            selectedVoiceId={selectedVoiceId}
+            onVoiceChange={handleVoiceChange}
+            speechSpeed={speechSpeed}
+            onSpeedChange={handleSpeedChange}
+            voices={availableVoices}
+            isLoading={voicesLoading}
+            currentTtsEngine={currentTtsEngine}
+            onTtsEngineChange={handleTtsEngineChange}
+          />
+        </div>
+      </header>
+
+      <div className="app-body">
+        <section className="pane pane-sentences">
+          {hasDocument ? (
+            <>
+              <div className="pane-header">
+                <h2 className="pane-title">Extracted Sentences</h2>
+                <span className="pane-count">{sentences.length} sentences</span>
+              </div>
+
+              <div className="sentence-list" ref={sentenceListRef}>
+                {sentences.map((sentence, index) => (
+                  <SentenceItem
+                    key={index}
+                    sentence={sentence}
+                    index={index}
+                    onPlay={() => {
+                      // Disable continuous playback when manually selecting a sentence
+                      dispatchApp({
+                        type: "SET_CONTINUOUS_PLAYBACK",
+                        payload: false,
+                      });
+                      handlePlay(index);
+                    }}
+                    onStop={handlePause}
+                    isPlaying={
+                      playbackState.status === "playing" &&
+                      playbackState.currentIndex === index
+                    }
+                    isLastPlayed={playbackState.currentIndex === index}
+                    isGeneratingAudio={generatingAudioIndex === index}
+                  />
+                ))}
+              </div>
+
+              <TransportBar
+                onPlayPause={handlePlayPause}
+                onNext={handleNext}
+                onPrevious={handlePrevious}
+                onStop={handleStop}
+                isPlaying={playbackState.status === "playing"}
+                cachedCount={audioCache.size}
+              />
+            </>
+          ) : (
+            <div className="empty-state">
               <div className="upload-box">
-                <StyledButton
-                  type="upload"
-                  onClick={() =>
-                    document.getElementById("file-upload")?.click()
-                  }
-                >
+                <StyledButton type="upload" onClick={triggerFilePicker}>
                   Select PDF to Upload
                 </StyledButton>
-                <input
-                  id="file-upload"
-                  type="file"
-                  name="file"
-                  accept="application/pdf"
-                  required
-                  onChange={handleFileUpload}
-                  style={{ display: "none" }}
-                />
                 <p className="upload-text">
                   The conversion will start automatically.
                 </p>
               </div>
-
-              {sentences.length > 0 && (
-                <div id="results-container">
-                  <h2 className="results-title">Extracted Sentences</h2>
-                  <div className="sentence-list" ref={sentenceListRef}>
-                    {sentences.map((sentence, index) => (
-                      <SentenceItem
-                        key={index}
-                        sentence={sentence}
-                        index={index}
-                        onPlay={() => {
-                          // Disable continuous playback when manually selecting a sentence
-                          dispatchApp({
-                            type: "SET_CONTINUOUS_PLAYBACK",
-                            payload: false,
-                          });
-                          handlePlay(index);
-                        }}
-                        onStop={handlePause}
-                        isPlaying={
-                          playbackState.status === "playing" &&
-                          playbackState.currentIndex === index
-                        }
-                        isLastPlayed={playbackState.currentIndex === index}
-                        isGeneratingAudio={generatingAudioIndex === index}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
+              <footer className="footer">
+                <p>
+                  React Frontend | Node.js &amp; Python Backend | TTS Engine |
+                  Created with Claude Sonnet 4
+                </p>
+              </footer>
             </div>
-            <div className="right-column">
-              <div className="pdf-preview-container">
-                <PdfViewer file={pdfFile} className="pdf-preview-iframe" />
-              </div>
+          )}
+        </section>
 
-              {/* Cache Status Display */}
-              <div
-                style={{
-                  marginTop: "1rem",
-                  padding: "0.5rem",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                }}
-              >
-                <div style={{ fontSize: "0.9rem", color: "#666" }}>
-                  Cache Status: {audioCache.size} sentences cached
-                </div>
-              </div>
-
-              {error && (
-                <ErrorMessage message={error} onDismiss={handleDismissError} />
-              )}
-            </div>
+        <section className="pane pane-document">
+          <div className="pdf-preview-container">
+            <PdfViewer file={pdfFile} className="pdf-preview-iframe" />
           </div>
-        </div>
-        {sentences.length > 0 && (
-          <FloatingControls
-            onPlayPause={handlePlayPause}
-            onNext={handleNext}
-            onPrevious={handlePrevious}
-            onStop={handleStop}
-            isPlaying={playbackState.status === "playing"}
-          />
-        )}
-        <footer className="footer">
-          <p>
-            React Frontend | Node.js & Python Backend | TTS Engine | Created
-            with Claude Sonnet 4
-          </p>
-        </footer>
+        </section>
       </div>
     </div>
   );

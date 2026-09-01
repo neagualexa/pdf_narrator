@@ -117,7 +117,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
           alignItems: "center",
           justifyContent: "center",
           color: "#a0aec0",
-          height: "400px",
+          height: "100%",
         }}
       >
         PDF preview will appear here
