@@ -1004,6 +1004,18 @@ body.is-resizing {
   border: none;
 }
 
+/* Active-sentence highlight in the PDF text layer.
+   pdf.js paints the real glyphs on the canvas underneath and overlays
+   transparent selectable text, so <mark> must stay transparent too - its
+   default colour would render a second, offset copy of the words. */
+.react-pdf__Page__textContent mark.pdf-highlight {
+  background-color: rgba(16, 185, 129, 0.3);
+  color: transparent;
+  border-radius: 2px;
+  padding: 0;
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.35);
+}
+
 /* Loading */
 .loading-overlay {
   position: fixed;

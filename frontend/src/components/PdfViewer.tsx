@@ -1,8 +1,19 @@
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, {
+  useState,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 import StyledButton from "./StyledButton";
+import {
+  findHighlightRanges,
+  escapeHtml,
+  PdfTextItem,
+} from "../pdfHighlight";
 
 // Use external CDN as per official instructions
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -12,12 +23,15 @@ interface PdfViewerProps {
   className?: string;
   /** 1-based page the currently playing sentence came from, if known. */
   activePage?: number | null;
+  /** Text of the current sentence, highlighted in the page's text layer. */
+  activeSentence?: string | null;
 }
 
 export const PdfViewer: React.FC<PdfViewerProps> = ({
   file,
   className,
   activePage,
+  activeSentence,
 }) => {
   const [numPages, setNumPages] = useState<number | null>(null);
   const [pageNumber, setPageNumber] = useState<number>(1);
@@ -27,6 +41,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const [baseWidth, setBaseWidth] = useState<number>(600);
   const [showHelp, setShowHelp] = useState<boolean>(false);
   const [followPlayback, setFollowPlayback] = useState<boolean>(true);
+  const [textItems, setTextItems] = useState<PdfTextItem[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -59,6 +74,35 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     observer.observe(root);
     return () => observer.disconnect();
   }, [file]);
+
+  useEffect(() => {
+    setTextItems([]);
+  }, [pageNumber, file]);
+
+  // Character ranges of the active sentence within each text item.
+  const highlightRanges = useMemo(
+    () => findHighlightRanges(textItems, activeSentence),
+    [textItems, activeSentence],
+  );
+
+  // react-pdf assigns this return value with innerHTML, so everything that is
+  // not our own markup has to be escaped.
+  const customTextRenderer = useCallback(
+    ({ str, itemIndex }: { str: string; itemIndex: number }) => {
+      const range = highlightRanges.get(itemIndex);
+      if (!range) return escapeHtml(str);
+
+      const [from, to] = range;
+      return (
+        escapeHtml(str.slice(0, from)) +
+        '<mark class="pdf-highlight">' +
+        escapeHtml(str.slice(from, to)) +
+        "</mark>" +
+        escapeHtml(str.slice(to))
+      );
+    },
+    [highlightRanges],
+  );
 
   // Follow playback across page boundaries, unless the user has taken over.
   useEffect(() => {
@@ -230,6 +274,10 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
               width={baseWidth * scale}
               renderTextLayer={true}
               renderAnnotationLayer={true}
+              onGetTextSuccess={(textContent) =>
+                setTextItems((textContent?.items ?? []) as PdfTextItem[])
+              }
+              customTextRenderer={customTextRenderer}
             />
           </Document>
         </div>

@@ -506,6 +506,10 @@ export default function App() {
 
   const handlePlayDemo = useCallback(async () => {
     stopDemo();
+
+    // The preview and the narration would otherwise talk over each other.
+    await handlePause();
+
     const token = demoTokenRef.current;
 
     const rawName = availableVoices.find((v) => v.id === selectedVoiceId)?.name;
@@ -533,7 +537,7 @@ export default function App() {
     } finally {
       if (token === demoTokenRef.current) setIsDemoLoading(false);
     }
-  }, [availableVoices, selectedVoiceId, speechSpeed, stopDemo]);
+  }, [availableVoices, selectedVoiceId, speechSpeed, stopDemo, handlePause]);
 
   // Any interaction anywhere else in the UI cuts the demo off immediately.
   // Capture phase, so it runs before the control's own handler; the Preview
@@ -1043,6 +1047,7 @@ export default function App() {
               file={pdfFile}
               className="pdf-preview-iframe"
               activePage={sentencePages[playbackState.currentIndex] ?? null}
+              activeSentence={sentences[playbackState.currentIndex] ?? null}
             />
           </div>
         </section>
