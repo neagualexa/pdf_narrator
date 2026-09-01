@@ -8,6 +8,8 @@ export interface AudioCacheEntry {
 
 export interface AppState {
   sentences: string[];
+  /** 1-based source page for each sentence, parallel to `sentences`. */
+  sentencePages: number[];
   pdfFile: File | null;
   isLoading: boolean;
   error: string | null;
@@ -35,6 +37,7 @@ export type PlaybackAction =
 
 export type AppAction =
   | { type: "SET_SENTENCES"; payload: string[] }
+  | { type: "SET_SENTENCE_PAGES"; payload: number[] }
   | { type: "SET_PDF_FILE"; payload: File | null }
   | { type: "SET_LOADING"; payload: boolean }
   | { type: "SET_ERROR"; payload: string | null }
@@ -100,30 +103,4 @@ export interface VoiceControlsProps {
   isLoading: boolean;
   currentTtsEngine: "pyttsx3" | "piper";
   onTtsEngineChange: (engine: "pyttsx3" | "piper") => void;
-}
-
-// Re-export StyledButton types for convenience
-export interface StyledButtonProps {
-  onClick?: () => void;
-  disabled?: boolean;
-  type?:
-    | "primary"
-    | "secondary"
-    | "help"
-    | "play-start"
-    | "play-stop"
-    | "play-loading"
-    | "control"
-    | "control-play-pause"
-    | "control-stop"
-    | "speed"
-    | "engine"
-    | "engine-active"
-    | "voice-toggle";
-  title?: string;
-  children: React.ReactNode;
-  onMouseEnter?: () => void;
-  onMouseLeave?: () => void;
-  loading?: boolean;
-  active?: boolean;
 }

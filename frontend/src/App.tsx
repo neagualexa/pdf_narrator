@@ -1,4 +1,10 @@
-import React, { useReducer, useCallback, useEffect, useRef } from "react";
+import React, {
+  useReducer,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { appReducer, initialAppState } from "./reducers/appReducer";
 import {
   playbackReducer,
@@ -15,6 +21,10 @@ import { PdfViewer } from "./components/PdfViewer";
 import StyledButton from "./components/StyledButton";
 import * as api from "./api";
 import "./styles";
+
+const SPLIT_STORAGE_KEY = "pdf-narrator:split-percent";
+const MIN_SPLIT = 25;
+const MAX_SPLIT = 75;
 
 export default function App() {
   const [appState, dispatchApp] = useReducer(appReducer, initialAppState);
@@ -53,6 +63,7 @@ export default function App() {
 
   const {
     sentences,
+    sentencePages,
     pdfFile,
     isLoading,
     error,
@@ -127,6 +138,7 @@ export default function App() {
       dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
       dispatchPlaybackSync({ type: "RESET" });
       dispatchApp({ type: "SET_SENTENCES", payload: [] });
+      dispatchApp({ type: "SET_SENTENCE_PAGES", payload: [] });
 
       // Store the PDF file for the viewer
       dispatchApp({
@@ -137,6 +149,7 @@ export default function App() {
       try {
         const data = await api.uploadPdf(file);
         dispatchApp({ type: "SET_SENTENCES", payload: data.sentences });
+        dispatchApp({ type: "SET_SENTENCE_PAGES", payload: data.pages ?? [] });
       } catch (err) {
         dispatchApp({
           type: "SET_ERROR",
@@ -464,8 +477,13 @@ export default function App() {
 
       const target = event.target as HTMLElement | null;
 
-      // Never steal keys from a form control (e.g. the voice dropdown).
-      if (target?.closest("input, select, textarea, [contenteditable='true']")) {
+      // Never steal keys from a form control (e.g. the voice dropdown), or
+      // from the pane divider, which uses the arrow keys to resize.
+      if (
+        target?.closest(
+          "input, select, textarea, [contenteditable='true'], [role='separator']",
+        )
+      ) {
         return;
       }
 
@@ -617,6 +635,81 @@ export default function App() {
 
   const hasDocument = sentences.length > 0;
 
+  // --- Resizable split between the two panes -------------------------------
+  const appBodyRef = useRef<HTMLDivElement>(null);
+  const [splitPercent, setSplitPercent] = useState<number>(() => {
+    const stored = Number(window.localStorage.getItem(SPLIT_STORAGE_KEY));
+    return Number.isFinite(stored) && stored >= MIN_SPLIT && stored <= MAX_SPLIT
+      ? stored
+      : 50;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+
+  const applySplitFromClientX = useCallback((clientX: number) => {
+    const body = appBodyRef.current;
+    if (!body) return;
+    const rect = body.getBoundingClientRect();
+    if (rect.width === 0) return;
+    const percent = ((clientX - rect.left) / rect.width) * 100;
+    setSplitPercent(Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, percent)));
+  }, []);
+
+  const handleDividerPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setIsResizing(true);
+    },
+    [],
+  );
+
+  const handleDividerPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+      applySplitFromClientX(event.clientX);
+    },
+    [applySplitFromClientX],
+  );
+
+  const handleDividerPointerUp = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      setIsResizing(false);
+    },
+    [],
+  );
+
+  // Keyboard resizing, so the divider is not mouse-only.
+  const handleDividerKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const step = event.shiftKey ? 10 : 2;
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setSplitPercent((p) => Math.max(MIN_SPLIT, p - step));
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setSplitPercent((p) => Math.min(MAX_SPLIT, p + step));
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setSplitPercent(50);
+      }
+    },
+    [],
+  );
+
+  // Suppress text selection and keep the resize cursor while dragging.
+  useEffect(() => {
+    if (!isResizing) return;
+    document.body.classList.add("is-resizing");
+    return () => document.body.classList.remove("is-resizing");
+  }, [isResizing]);
+
+  useEffect(() => {
+    window.localStorage.setItem(SPLIT_STORAGE_KEY, String(splitPercent));
+  }, [splitPercent]);
+
   const triggerFilePicker = useCallback(() => {
     document.getElementById("file-upload")?.click();
   }, []);
@@ -682,7 +775,13 @@ export default function App() {
         </div>
       </header>
 
-      <div className="app-body">
+      <div
+        className="app-body"
+        ref={appBodyRef}
+        style={{
+          gridTemplateColumns: `${splitPercent}% 0.5rem minmax(0, 1fr)`,
+        }}
+      >
         <section className="pane pane-sentences">
           {hasDocument ? (
             <>
@@ -747,9 +846,30 @@ export default function App() {
           )}
         </section>
 
+        <div
+          className={`pane-divider ${isResizing ? "is-resizing" : ""}`}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize panes"
+          aria-valuenow={Math.round(splitPercent)}
+          aria-valuemin={MIN_SPLIT}
+          aria-valuemax={MAX_SPLIT}
+          tabIndex={0}
+          onPointerDown={handleDividerPointerDown}
+          onPointerMove={handleDividerPointerMove}
+          onPointerUp={handleDividerPointerUp}
+          onPointerCancel={handleDividerPointerUp}
+          onDoubleClick={() => setSplitPercent(50)}
+          onKeyDown={handleDividerKeyDown}
+        />
+
         <section className="pane pane-document">
           <div className="pdf-preview-container">
-            <PdfViewer file={pdfFile} className="pdf-preview-iframe" />
+            <PdfViewer
+              file={pdfFile}
+              className="pdf-preview-iframe"
+              activePage={sentencePages[playbackState.currentIndex] ?? null}
+            />
           </div>
         </section>
       </div>

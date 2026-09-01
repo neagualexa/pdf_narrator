@@ -55,7 +55,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
         type="toolbar"
         active={isExpanded}
         onClick={toggleExpanded}
-        title="Voice, engine and speed settings"
+        title="Voice &amp; Speed settings - engine, voice and rate"
       >
         <svg
           width="15"
@@ -75,7 +75,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
           <div className="voice-controls-header">
             <h3>Voice & Speed Controls</h3>
             <StyledButton
-              type="secondary"
+              type="close"
               onClick={toggleExpanded}
               title="Close voice controls"
             >
@@ -107,18 +107,18 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
               </label>
               <div className="engine-toggle">
                 <StyledButton
-                  type={
-                    currentTtsEngine === "pyttsx3" ? "engine-active" : "engine"
-                  }
+                  type="engine"
+                  active={currentTtsEngine === "pyttsx3"}
                   onClick={() => onTtsEngineChange("pyttsx3")}
+                  title="System Voice - the operating system's built-in voices"
                 >
                   System Voice
                 </StyledButton>
                 <StyledButton
-                  type={
-                    currentTtsEngine === "piper" ? "engine-active" : "engine"
-                  }
+                  type="engine"
+                  active={currentTtsEngine === "piper"}
                   onClick={() => onTtsEngineChange("piper")}
+                  title="Piper Neural - higher quality neural voices"
                 >
                   Piper Neural
                 </StyledButton>

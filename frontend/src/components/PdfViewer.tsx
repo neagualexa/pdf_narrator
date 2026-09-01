@@ -10,9 +10,15 @@ pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/b
 interface PdfViewerProps {
   file: string | File | null;
   className?: string;
+  /** 1-based page the currently playing sentence came from, if known. */
+  activePage?: number | null;
 }
 
-export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
+export const PdfViewer: React.FC<PdfViewerProps> = ({
+  file,
+  className,
+  activePage,
+}) => {
   const [numPages, setNumPages] = useState<number | null>(null);
   const [pageNumber, setPageNumber] = useState<number>(1);
   const [loading, setLoading] = useState<boolean>(true);
@@ -20,20 +26,47 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
   const [scale, setScale] = useState<number>(1.0);
   const [baseWidth, setBaseWidth] = useState<number>(600);
   const [showHelp, setShowHelp] = useState<boolean>(false);
+  const [followPlayback, setFollowPlayback] = useState<boolean>(true);
   const containerRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const onDocumentLoadSuccess = useCallback(
     ({ numPages }: { numPages: number }) => {
       setNumPages(numPages);
       setLoading(false);
       setError(null);
-      // Set a reasonable base width based on container
-      const containerWidth =
-        containerRef.current?.clientWidth || window.innerWidth * 0.4;
-      setBaseWidth(Math.min(600, containerWidth - 40)); // 40px for padding
     },
     []
   );
+
+  // Fit-to-width, kept correct as the pane is resized. The old code measured
+  // once on load and capped the page at 600px, so the view neither reflowed
+  // nor used a wide pane.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    // Measure the root, not the scroll container: the container's clientWidth
+    // changes when its own vertical scrollbar appears, which would feed the
+    // page width back into the thing being observed and oscillate.
+    const measure = () => {
+      const width = root.clientWidth;
+      if (width > 0) setBaseWidth(Math.max(240, width - 40)); // 40px padding
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [file]);
+
+  // Follow playback across page boundaries, unless the user has taken over.
+  useEffect(() => {
+    if (!followPlayback) return;
+    if (!activePage || !numPages) return;
+    if (activePage < 1 || activePage > numPages) return;
+    setPageNumber(activePage);
+  }, [followPlayback, activePage, numPages]);
 
   const onDocumentLoadError = useCallback((error: Error) => {
     console.error("Error loading PDF:", error);
@@ -41,11 +74,15 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
     setLoading(false);
   }, []);
 
+  // Paging by hand is an explicit takeover, so it releases follow mode rather
+  // than being undone by the next sentence.
   const goToPrevPage = useCallback(() => {
+    setFollowPlayback(false);
     setPageNumber((page) => Math.max(1, page - 1));
   }, []);
 
   const goToNextPage = useCallback(() => {
+    setFollowPlayback(false);
     setPageNumber((page) => (numPages ? Math.min(numPages, page + 1) : page));
   }, [numPages]);
 
@@ -54,7 +91,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
   }, []);
 
   const zoomOut = useCallback(() => {
-    setScale((prevScale) => Math.max(prevScale - 0.25, 1.0));
+    setScale((prevScale) => Math.max(prevScale - 0.25, 0.5));
   }, []);
 
   const resetZoom = useCallback(() => {
@@ -126,7 +163,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
   }
 
   return (
-    <div className={className} style={{ position: "relative", height: "100%" }}>
+    <div
+      ref={rootRef}
+      className={className}
+      style={{ position: "relative", height: "100%" }}
+    >
       {loading && (
         <div
           style={{
@@ -195,7 +236,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
       </div>
 
       {/* Navigation Controls */}
-      {numPages && numPages > 1 && !loading && !error && (
+      {numPages && !loading && !error && (
         <div
           style={{
             position: "absolute",
@@ -301,6 +342,39 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
             }}
           />
 
+          {/* Follow playback */}
+          <StyledButton
+            type="toolbar"
+            active={followPlayback}
+            onClick={() => setFollowPlayback((on) => !on)}
+            title={
+              followPlayback
+                ? "Follow playback: on - the page turns with the narration"
+                : "Follow playback: off - click to track the narration again"
+            }
+          >
+            <svg
+              width="13"
+              height="13"
+              fill="currentColor"
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            >
+              <path d="M4.715 6.542 3.343 7.914a3 3 0 1 0 4.243 4.243l1.828-1.829A3 3 0 0 0 8.586 5.5L8 6.086a1.002 1.002 0 0 0-.154.199 2 2 0 0 1 .861 3.337L6.88 11.45a2 2 0 1 1-2.83-2.83l.793-.792a4.018 4.018 0 0 1-.128-1.287z" />
+              <path d="M6.586 4.672A3 3 0 0 0 7.414 9.5l.775-.776a2 2 0 0 1-.896-3.346L9.12 3.55a2 2 0 1 1 2.83 2.83l-.793.792c.112.42.155.855.128 1.287l1.372-1.372a3 3 0 1 0-4.243-4.243L6.586 4.672z" />
+            </svg>
+            Follow
+          </StyledButton>
+
+          {/* Divider */}
+          <div
+            style={{
+              width: "1px",
+              height: "30px",
+              backgroundColor: "#e2e8f0",
+            }}
+          />
+
           {/* Help Button */}
           <div style={{ position: "relative" }}>
             <StyledButton
@@ -331,7 +405,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, className }) => {
                 onMouseEnter={() => setShowHelp(true)}
                 onMouseLeave={() => setShowHelp(false)}
               >
-                Ctrl+Scroll: zoom • Use buttons to navigate
+                Ctrl+Scroll: zoom • Follow: page turns with narration
                 <div
                   style={{
                     position: "absolute",

@@ -20,17 +20,52 @@ router.post(
 
     try {
       const dataBuffer = fs.readFileSync(req.file.path);
-      const data = await pdf(dataBuffer);
+
+      // Capture each page's text as it renders so sentences can be attributed
+      // to a source page. This mirrors pdf-parse's own default renderer; we
+      // only intercept the per-page result on the way past.
+      const pageTexts: string[] = [];
+      const data = await pdf(dataBuffer, {
+        pagerender: async (pageData: any): Promise<string> => {
+          const textContent = await pageData.getTextContent({
+            normalizeWhitespace: false,
+            disableCombineTextItems: false,
+          });
+
+          let lastY: number | undefined;
+          let text = "";
+          for (const item of textContent.items) {
+            if (lastY === item.transform[5] || !lastY) {
+              text += item.str;
+            } else {
+              text += "\n" + item.str;
+            }
+            lastY = item.transform[5];
+          }
+
+          pageTexts.push(text);
+          return text;
+        },
+      });
 
       fs.unlinkSync(req.file.path);
 
+      // Sentinels the splitter consumes to tag each sentence with its page.
+      const markedText = pageTexts
+        .map((text, i) => `\n\n<<<PDFPAGE:${i + 1}>>>\n\n${text}`)
+        .join("");
+
       const result = await runPythonScript(CONFIG.SCRIPTS.SENTENCE_SPLITTER, [
-        data.text,
+        markedText,
       ]);
 
       if (result.code === 0) {
-        const sentences = JSON.parse(result.stdout);
-        res.json({ sentences });
+        const parsed = JSON.parse(result.stdout);
+        res.json({
+          sentences: parsed.sentences,
+          pages: parsed.pages,
+          numPages: data.numpages,
+        });
       } else {
         console.error(`Sentence splitter script error:`, result.stderr);
         res

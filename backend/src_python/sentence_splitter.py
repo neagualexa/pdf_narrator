@@ -9,6 +9,12 @@ from typing import List, Dict, Any
 # Global flag for graceful shutdown
 shutdown_requested = False
 
+# Page sentinel injected by the upload route between pages. Deliberately built
+# from characters no transformation in this file touches: it has no parentheses
+# or brackets (citation filters), no hyphens (line-break joins), no whitespace
+# (the \s+ collapse) and no symbol from vocabulary_config word_replacements.
+PAGE_MARKER_RE = re.compile(r'<<<PDFPAGE:(\d+)>>>')
+
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
     global shutdown_requested
@@ -157,51 +163,86 @@ def filter_harvard_citations_and_references(text: str) -> str:
     
     return text
 
+# Compiled once - these are hot across every sentence in the document.
+_BIBLIOGRAPHY_PATTERN = re.compile(r'\b(?:19|20)\d{2}\b.*?\.\s*[A-Z][^.]*\.\s*[A-Z]')
+_REFERENCE_KEYWORDS = re.compile(r'^\s*(References?|Bibliography|Works?\s+Cited|Sources?)\s*\.?\s*$', re.IGNORECASE)
+_URL_PATTERN = re.compile(r'\b(doi:|https?://|www\.)', re.IGNORECASE)
+_YEAR_PATTERN = re.compile(r'\b(?:19|20)\d{2}\b')
+
+
+def is_reference_like(sentence: str) -> bool:
+    """
+    True when a sentence looks like a reference/bibliography entry rather than
+    body text worth reading aloud.
+    """
+    # Bibliography entries
+    if _BIBLIOGRAPHY_PATTERN.search(sentence):
+        return True
+
+    # Section headings such as "References"
+    if _REFERENCE_KEYWORDS.match(sentence):
+        return True
+
+    # DOI or URL references
+    if _URL_PATTERN.search(sentence):
+        return True
+
+    # Multiple years - likely a reference list
+    if len(_YEAR_PATTERN.findall(sentence)) > 2:
+        return True
+
+    # Citation fragments
+    if len(sentence.strip()) < 20:
+        return True
+
+    return False
+
+
 def filter_reference_sections(sentences: List[str]) -> List[str]:
     """
     Remove sentences that appear to be from reference/bibliography sections.
-    Optimized with compiled patterns and early filtering.
     """
     global shutdown_requested
     if shutdown_requested:
         return sentences
-    
+
     filtered_sentences = []
-    
-    # Compile patterns for better performance
-    bibliography_pattern = re.compile(r'\b(?:19|20)\d{2}\b.*?\.\s*[A-Z][^.]*\.\s*[A-Z]')
-    reference_keywords = re.compile(r'^\s*(References?|Bibliography|Works?\s+Cited|Sources?)\s*\.?\s*$', re.IGNORECASE)
-    url_pattern = re.compile(r'\b(doi:|https?://|www\.)', re.IGNORECASE)
-    year_pattern = re.compile(r'\b(?:19|20)\d{2}\b')
-    
     for sentence in sentences:
         if shutdown_requested:
             break
-            
-        # Skip sentences that look like bibliography entries
-        if bibliography_pattern.search(sentence):
+        if is_reference_like(sentence):
             continue
-            
-        # Skip sentences starting with common reference keywords
-        if reference_keywords.match(sentence):
-            continue
-            
-        # Skip sentences that are likely DOI or URL references
-        if url_pattern.search(sentence):
-            continue
-            
-        # Skip sentences with multiple years (likely reference lists)
-        year_matches = year_pattern.findall(sentence)
-        if len(year_matches) > 2:
-            continue
-            
-        # Skip very short sentences that might be citation fragments
-        if len(sentence.strip()) < 20:
-            continue
-            
         filtered_sentences.append(sentence)
-    
+
     return filtered_sentences
+
+
+def assign_pages(sentences: List[str]) -> List[Dict[str, Any]]:
+    """
+    Consume the page sentinels and tag every sentence with the 1-based page it
+    starts on. Runs before reference filtering so that dropping a sentence can
+    never lose a page transition.
+    """
+    tagged: List[Dict[str, Any]] = []
+    current_page = 1
+
+    for sentence in sentences:
+        matches = list(PAGE_MARKER_RE.finditer(sentence))
+
+        if matches:
+            # Text before the first marker still belongs to the previous page;
+            # with no such text the sentence starts on the new page.
+            prefix = sentence[:matches[0].start()].strip()
+            page = current_page if prefix else int(matches[0].group(1))
+            current_page = int(matches[-1].group(1))
+            cleaned = re.sub(r'\s+', ' ', PAGE_MARKER_RE.sub(' ', sentence)).strip()
+        else:
+            page = current_page
+            cleaned = sentence
+
+        tagged.append({"text": cleaned, "page": page})
+
+    return tagged
 
 def split_text_into_sentences(text: str) -> None:
     """
@@ -224,60 +265,68 @@ def split_text_into_sentences(text: str) -> None:
             nltk.download('punkt', quiet=True)
 
         if shutdown_requested:
-            print(json.dumps([]))
+            print(json.dumps({"sentences": [], "pages": []}))
             return
 
         # First, fix hyphenated line breaks from PDF text
         text = fix_hyphenated_line_breaks(text)
         
         if shutdown_requested:
-            print(json.dumps([]))
+            print(json.dumps({"sentences": [], "pages": []}))
             return
 
         # Apply vocabulary pronunciation rules and replacements
         text = apply_vocabulary_rules(text, vocab_config)
         
         if shutdown_requested:
-            print(json.dumps([]))
+            print(json.dumps({"sentences": [], "pages": []}))
             return
 
         # Then, filter out Harvard and Vancouver citations from the entire text
         filtered_text = filter_harvard_citations_and_references(text)
         
         if shutdown_requested:
-            print(json.dumps([]))
+            print(json.dumps({"sentences": [], "pages": []}))
             return
         
         # Split into sentences
         sentences = nltk.sent_tokenize(filtered_text)
         
         if shutdown_requested:
-            print(json.dumps([]))
+            print(json.dumps({"sentences": [], "pages": []}))
             return
-        
-        # Filter out reference sections and bibliography entries
-        clean_sentences = filter_reference_sections(sentences)
-        
-        # Additional filtering: remove empty sentences and normalize whitespace
-        final_sentences = []
-        for sentence in clean_sentences:
+
+        # Resolve page numbers before any filtering drops a sentence.
+        tagged = assign_pages(sentences)
+
+        final_sentences: List[str] = []
+        final_pages: List[int] = []
+
+        for entry in tagged:
             if shutdown_requested:
                 break
+
+            sentence = entry["text"]
+
+            # Filter out reference sections and bibliography entries
+            if is_reference_like(sentence):
+                continue
+
             cleaned = sentence.strip()
             if cleaned and len(cleaned) > 10:  # Minimum meaningful length
                 final_sentences.append(cleaned)
-        
-        # Print the list of clean sentences as a JSON string
-        print(json.dumps(final_sentences))
+                final_pages.append(entry["page"])
+
+        print(json.dumps({"sentences": final_sentences, "pages": final_pages}))
         
     except KeyboardInterrupt:
-        print(json.dumps([]), file=sys.stderr)
+        print(json.dumps({"sentences": [], "pages": []}), file=sys.stderr)
         sys.exit(1)
     except Exception as e:
         # Output any errors to stderr
         error_msg = f"Error in sentence splitting script: {e}"
         print(error_msg, file=sys.stderr)
-        print(json.dumps([]), file=sys.stderr)
+        print(json.dumps({"sentences": [], "pages": []}), file=sys.stderr)
         sys.exit(1)
 
 if __name__ == "__main__":
@@ -286,5 +335,5 @@ if __name__ == "__main__":
         input_text = sys.argv[1]
         split_text_into_sentences(input_text)
     else:
-        # If no text is provided, output an empty JSON array.
-        print(json.dumps([]))
+        # If no text is provided, output an empty result.
+        print(json.dumps({"sentences": [], "pages": []}))

@@ -2,6 +2,7 @@ import { AppState, AppAction } from "../types";
 
 export const initialAppState: AppState = {
   sentences: [],
+  sentencePages: [],
   pdfFile: null,
   isLoading: false,
   error: null,
@@ -20,6 +21,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case "SET_SENTENCES":
       return { ...state, sentences: action.payload };
+    case "SET_SENTENCE_PAGES":
+      return { ...state, sentencePages: action.payload };
     case "SET_PDF_FILE":
       return { ...state, pdfFile: action.payload };
     case "SET_LOADING":

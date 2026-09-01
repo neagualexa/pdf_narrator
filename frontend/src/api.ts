@@ -22,9 +22,12 @@ async function handleResponse(response: Response) {
 /**
  * Uploads a PDF file to the backend.
  * @param file The PDF file to upload.
- * @returns A promise that resolves with the extracted sentences.
+ * @returns A promise that resolves with the extracted sentences, the 1-based
+ *          source page of each sentence, and the document's page count.
  */
-export async function uploadPdf(file: File): Promise<{ sentences: string[] }> {
+export async function uploadPdf(
+  file: File
+): Promise<{ sentences: string[]; pages: number[]; numPages: number }> {
   const formData = new FormData();
   formData.append("file", file);
 
