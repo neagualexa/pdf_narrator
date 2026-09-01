@@ -17,7 +17,7 @@ yarn-error.log*
 /coverage/
 /.next/
 /out/
-*/docs
+/docs/
 
 # Python
 __pycache__/
