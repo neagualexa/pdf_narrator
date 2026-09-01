@@ -29,6 +29,9 @@ const SETTINGS_STORAGE_KEY = "pdf-narrator:settings";
 const MIN_SPLIT = 25;
 const MAX_SPLIT = 75;
 
+/** Width of the sentence pane; the PDF takes the rest. */
+const DEFAULT_SPLIT = 30;
+
 /** Below this the two panes cannot both be usable, so they become tabs. */
 const NARROW_QUERY = "(max-width: 1024px)";
 
@@ -777,7 +780,7 @@ export default function App() {
     const stored = Number(window.localStorage.getItem(SPLIT_STORAGE_KEY));
     return Number.isFinite(stored) && stored >= MIN_SPLIT && stored <= MAX_SPLIT
       ? stored
-      : 50;
+      : DEFAULT_SPLIT;
   });
   const [isResizing, setIsResizing] = useState(false);
 
@@ -829,7 +832,7 @@ export default function App() {
         setSplitPercent((p) => Math.min(MAX_SPLIT, p + step));
       } else if (event.key === "Home") {
         event.preventDefault();
-        setSplitPercent(50);
+        setSplitPercent(DEFAULT_SPLIT);
       }
     },
     [],
@@ -1037,7 +1040,7 @@ export default function App() {
           onPointerMove={handleDividerPointerMove}
           onPointerUp={handleDividerPointerUp}
           onPointerCancel={handleDividerPointerUp}
-          onDoubleClick={() => setSplitPercent(50)}
+          onDoubleClick={() => setSplitPercent(DEFAULT_SPLIT)}
           onKeyDown={handleDividerKeyDown}
         />
 
