@@ -1,4 +1,5 @@
-const API_URL = "http://localhost:3001";
+const API_URL =
+  process.env.REACT_APP_API_URL || "http://localhost:3001";
 
 /**
  * A helper function to handle fetch responses.
