@@ -1,176 +1,229 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import * as api from "../api";
 import { AudioCacheEntry } from "../types";
 
-export function useAudioCache() {
+export const LOOKAHEAD = 2;
+
+/**
+ * Owns the sentence -> audio file cache.
+ *
+ * The cache lives in a ref rather than in reducer state so that concurrent
+ * prefetches never clobber each other with a stale snapshot of the Map. The
+ * ref is mirrored into app state via `onCacheChange` purely so the UI can
+ * render cache-dependent bits.
+ */
+export function useAudioCache(
+  onCacheChange?: (newCache: Map<number, AudioCacheEntry>) => void,
+) {
+  const cacheRef = useRef<Map<number, AudioCacheEntry>>(new Map());
+  const pendingRef = useRef<Map<number, Promise<AudioCacheEntry | null>>>(
+    new Map(),
+  );
+
+  // Keep the callback in a ref so the returned functions stay stable.
+  const onCacheChangeRef = useRef(onCacheChange);
+  onCacheChangeRef.current = onCacheChange;
+
+  const publishCache = useCallback(() => {
+    onCacheChangeRef.current?.(new Map(cacheRef.current));
+  }, []);
+
+  const getCache = useCallback(() => cacheRef.current, []);
+
+  const isPending = useCallback(
+    (index: number) => pendingRef.current.has(index),
+    [],
+  );
+
+  /**
+   * Drops cache entries that are outside the window we still care about
+   * ([currentIndex - 1, currentIndex + LOOKAHEAD]) once the cache grows past
+   * `maxCacheSize`, deleting the backing files on the server.
+   */
   const manageCacheSize = useCallback(
-    (
-      audioCache: Map<number, AudioCacheEntry>,
-      currentIndex: number,
-      maxCacheSize: number = 3,
-      updateCache: (newCache: Map<number, AudioCacheEntry>) => void
-    ) => {
-      if (audioCache.size <= maxCacheSize) return;
+    (currentIndex: number, maxCacheSize: number = LOOKAHEAD + 3) => {
+      if (cacheRef.current.size <= maxCacheSize) return;
 
-      const newCache = new Map(audioCache);
-      const entriesToRemove: number[] = [];
+      const keepFrom = currentIndex - 1;
+      const keepTo = currentIndex + LOOKAHEAD;
 
-      // Sort entries by distance from current index
-      const entriesByDistance = Array.from(audioCache.keys())
+      // Furthest entries first, so we drop the least useful ones.
+      const evictable = Array.from(cacheRef.current.keys())
+        .filter((index) => index < keepFrom || index > keepTo)
         .map((index) => ({ index, distance: Math.abs(index - currentIndex) }))
         .sort((a, b) => b.distance - a.distance);
 
-      // Remove the most distant entries until we're under the limit
-      const excessCount = audioCache.size - maxCacheSize;
-      for (let i = 0; i < excessCount && i < entriesByDistance.length; i++) {
-        const entryIndex = entriesByDistance[i].index;
-        // Don't remove the current playing sentence or immediately adjacent ones
-        if (Math.abs(entryIndex - currentIndex) > 1) {
-          entriesToRemove.push(entryIndex);
-        }
+      const excessCount = cacheRef.current.size - maxCacheSize;
+      const removed: number[] = [];
+
+      for (let i = 0; i < excessCount && i < evictable.length; i++) {
+        const entryIndex = evictable[i].index;
+        const entry = cacheRef.current.get(entryIndex);
+        if (!entry) continue;
+
+        api.cleanupAudio(entry.filename).catch((err) => {
+          console.warn("Failed to cleanup distant audio file:", err);
+        });
+        cacheRef.current.delete(entryIndex);
+        removed.push(entryIndex);
       }
 
-      // Remove the selected entries and cleanup files
-      entriesToRemove.forEach((index) => {
-        const entry = newCache.get(index);
-        if (entry) {
-          api.cleanupAudio(entry.filename).catch((err) => {
-            console.warn("Failed to cleanup distant audio file:", err);
-          });
-          newCache.delete(index);
-        }
-      });
-
-      console.log(
-        `Cache management: removed ${entriesToRemove.length} distant entries, cache size: ${newCache.size}`
-      );
-      updateCache(newCache);
+      if (removed.length > 0) {
+        console.log(
+          `Cache management: removed ${removed.length} distant entries, cache size: ${cacheRef.current.size}`,
+        );
+        publishCache();
+      }
     },
-    []
+    [publishCache],
   );
 
   const clearCacheEntry = useCallback(
-    (
-      audioCache: Map<number, AudioCacheEntry>,
-      index: number,
-      updateCache: (newCache: Map<number, AudioCacheEntry>) => void
-    ) => {
-      const newCache = new Map(audioCache);
-      const entry = newCache.get(index);
+    (index: number) => {
+      pendingRef.current.delete(index);
+
+      const entry = cacheRef.current.get(index);
       if (entry) {
         // Cleanup the audio file from server
         api.cleanupAudio(entry.filename).catch((err) => {
           console.warn("Failed to cleanup audio file:", err);
         });
-        newCache.delete(index);
-        updateCache(newCache);
+        cacheRef.current.delete(index);
+        publishCache();
       }
     },
-    []
+    [publishCache],
   );
 
-  const generateAudioForSentence = useCallback(
-    async (
+  /**
+   * Returns the audio for a sentence, generating it only if we don't already
+   * have it (or already have a request in flight for it). Concurrent callers
+   * for the same index share a single backend request.
+   */
+  const ensureAudio = useCallback(
+    (
+      index: number,
       sentence: string,
       speechSpeed: number,
-      index: number,
-      audioCache: Map<number, AudioCacheEntry>,
-      updateCache: (newCache: Map<number, AudioCacheEntry>) => void,
-      voiceId?: string | null
-    ): Promise<string | null> => {
-      if (!sentence) return null;
+      voiceId?: string | null,
+      options?: { force?: boolean },
+    ): Promise<AudioCacheEntry | null> => {
+      if (!sentence) return Promise.resolve(null);
 
-      try {
-        const response = await api.generateAudioIndexed(
+      if (options?.force) {
+        cacheRef.current.delete(index);
+        pendingRef.current.delete(index);
+      } else {
+        const cached = cacheRef.current.get(index);
+        if (cached) return Promise.resolve(cached);
+
+        const pending = pendingRef.current.get(index);
+        if (pending) return pending;
+      }
+
+      const request = api
+        .generateAudioIndexed(
           sentence,
           speechSpeed,
           index,
-          voiceId || undefined
-        );
-        const audioUrl = response.audioUrl;
-        const filename = response.filename;
+          voiceId || undefined,
+        )
+        .then((response) => {
+          const entry: AudioCacheEntry = {
+            url: response.audioUrl,
+            filename: response.filename,
+          };
+          cacheRef.current.set(index, entry);
+          publishCache();
+          return entry;
+        })
+        .catch((err: any) => {
+          console.warn(
+            `Failed to generate audio for sentence ${index + 1}:`,
+            err.message,
+          );
+          return null;
+        })
+        .finally(() => {
+          if (pendingRef.current.get(index) === request) {
+            pendingRef.current.delete(index);
+          }
+        });
 
-        // Store in cache
-        const newCache = new Map(audioCache);
-        newCache.set(index, { url: audioUrl, filename });
-        updateCache(newCache);
-
-        // Manage cache size after adding new entry (with slight delay to ensure state update)
-        setTimeout(() => manageCacheSize(newCache, index, 3, updateCache), 100);
-
-        return audioUrl;
-      } catch (err: any) {
-        console.warn(
-          `Failed to generate audio for sentence ${index + 1}:`,
-          err.message
-        );
-        return null;
-      }
+      pendingRef.current.set(index, request);
+      return request;
     },
-    [manageCacheSize]
+    [publishCache],
   );
 
-  const preloadAdjacentSentences = useCallback(
+  /**
+   * Generates the next `lookahead` sentences (and the previous one, for
+   * backwards navigation) ahead of time so playback can continue without a
+   * gap. Requests run sequentially: the nearest sentence must win the race for
+   * the single TTS process on the backend.
+   */
+  const prefetchAhead = useCallback(
     async (
       currentIndex: number,
       sentences: string[],
-      audioCache: Map<number, AudioCacheEntry>,
       speechSpeed: number,
-      updateCache: (newCache: Map<number, AudioCacheEntry>) => void,
-      voiceId?: string | null
+      voiceId?: string | null,
+      lookahead: number = LOOKAHEAD,
+      onReady?: (index: number, entry: AudioCacheEntry) => void,
     ) => {
-      const indicesToPreload = [];
-
-      // Add previous sentence if it exists and not already cached
-      if (currentIndex > 0 && !audioCache.has(currentIndex - 1)) {
-        indicesToPreload.push(currentIndex - 1);
+      const indices: number[] = [];
+      for (let offset = 1; offset <= lookahead; offset++) {
+        const index = currentIndex + offset;
+        if (index < sentences.length) indices.push(index);
       }
+      if (currentIndex > 0) indices.push(currentIndex - 1);
 
-      // Add next sentence if it exists and not already cached
-      if (
-        currentIndex + 1 < sentences.length &&
-        !audioCache.has(currentIndex + 1)
-      ) {
-        indicesToPreload.push(currentIndex + 1);
-      }
+      for (const index of indices) {
+        if (cacheRef.current.has(index)) {
+          // Already available - still let the caller buffer it.
+          onReady?.(index, cacheRef.current.get(index)!);
+          continue;
+        }
 
-      // Generate audio for each sentence sequentially
-      for (const index of indicesToPreload) {
         try {
-          await generateAudioForSentence(
+          const entry = await ensureAudio(
+            index,
             sentences[index],
             speechSpeed,
-            index,
-            audioCache,
-            updateCache,
-            voiceId
+            voiceId,
           );
-          // Small delay between requests to be gentle on the backend
-          await new Promise((resolve) => setTimeout(resolve, 200));
+          if (entry) onReady?.(index, entry);
         } catch (err) {
-          console.warn(`Failed to preload sentence ${index + 1}:`, err);
+          console.warn(`Failed to prefetch sentence ${index + 1}:`, err);
         }
       }
+
+      manageCacheSize(currentIndex);
     },
-    [generateAudioForSentence]
+    [ensureAudio, manageCacheSize],
   );
 
-  const cleanupAllCache = useCallback(
-    (audioCache: Map<number, AudioCacheEntry>) => {
-      audioCache.forEach((entry) => {
-        api.cleanupAudio(entry.filename).catch((err) => {
-          console.warn("Failed to cleanup cached audio file:", err);
-        });
+  const cleanupAllCache = useCallback(() => {
+    pendingRef.current.clear();
+
+    if (cacheRef.current.size === 0) return;
+
+    cacheRef.current.forEach((entry) => {
+      api.cleanupAudio(entry.filename).catch((err) => {
+        console.warn("Failed to cleanup cached audio file:", err);
       });
-    },
-    []
-  );
+    });
+    cacheRef.current = new Map();
+    publishCache();
+  }, [publishCache]);
 
   return {
+    getCache,
+    isPending,
+    ensureAudio,
+    prefetchAhead,
     manageCacheSize,
     clearCacheEntry,
-    generateAudioForSentence,
-    preloadAdjacentSentences,
     cleanupAllCache,
   };
 }

@@ -1,19 +1,77 @@
 import { useCallback, useRef } from "react";
 import * as api from "../api";
+import { LOOKAHEAD } from "./useAudioCache";
 
 export function useAudioManager() {
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentPlayPromiseRef = useRef<Promise<void> | null>(null);
   const currentPlayAttemptRef = useRef<(() => void) | null>(null);
 
-  const stopCurrentAudio = useCallback(async () => {
-    // Stop any active TTS generation process on the backend
-    try {
-      await api.stopAudio();
-    } catch (stopError) {
-      console.warn("Failed to stop backend TTS process:", stopError);
-    }
+  // Audio elements that have been created and told to buffer ahead of time,
+  // keyed by sentence index. Playing one of these is instant.
+  const preparedRef = useRef<Map<number, HTMLAudioElement>>(new Map());
 
+  const releasePrepared = useCallback((audio: HTMLAudioElement) => {
+    // Drop the buffered data so the browser can reclaim it.
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+  }, []);
+
+  const clearPrepared = useCallback(() => {
+    preparedRef.current.forEach(releasePrepared);
+    preparedRef.current.clear();
+  }, [releasePrepared]);
+
+  const clearPreparedAt = useCallback(
+    (index: number) => {
+      const audio = preparedRef.current.get(index);
+      if (audio) {
+        releasePrepared(audio);
+        preparedRef.current.delete(index);
+      }
+    },
+    [releasePrepared],
+  );
+
+  /**
+   * Creates the audio element for a sentence and starts buffering it while a
+   * previous sentence is still playing, so the handoff at `ended` is instant.
+   */
+  const prepare = useCallback((index: number, audioUrl: string) => {
+    if (preparedRef.current.has(index)) return;
+
+    const audio = new Audio();
+    audio.preload = "auto";
+    audio.src = audioUrl;
+    audio.playbackRate = 1.0;
+    audio.load();
+    preparedRef.current.set(index, audio);
+  }, []);
+
+  /**
+   * Drops buffered elements outside the window the cache also keeps, so we can
+   * never play an element whose backing file has been cleaned up server-side.
+   */
+  const prunePrepared = useCallback(
+    (currentIndex: number) => {
+      const keepFrom = currentIndex - 1;
+      const keepTo = currentIndex + LOOKAHEAD;
+      preparedRef.current.forEach((audio, preparedIndex) => {
+        if (preparedIndex < keepFrom || preparedIndex > keepTo) {
+          releasePrepared(audio);
+          preparedRef.current.delete(preparedIndex);
+        }
+      });
+    },
+    [releasePrepared],
+  );
+
+  /**
+   * Stops local playback without touching the backend, so in-flight prefetch
+   * generation survives. Used for sentence-to-sentence transitions.
+   */
+  const stopLocalAudio = useCallback(() => {
     // Clear any pending play promise
     currentPlayPromiseRef.current = null;
 
@@ -31,15 +89,31 @@ export function useAudioManager() {
     }
   }, []);
 
+  /**
+   * Stops playback and kills any TTS generation on the backend. Only for
+   * explicit user intent (stop / pause / manual navigation).
+   */
+  const stopCurrentAudio = useCallback(async () => {
+    // Stop any active TTS generation process on the backend
+    try {
+      await api.stopAudio();
+    } catch (stopError) {
+      console.warn("Failed to stop backend TTS process:", stopError);
+    }
+
+    stopLocalAudio();
+  }, [stopLocalAudio]);
+
   const playAudio = useCallback(
     async (
+      index: number,
       audioUrl: string,
       filename: string,
       onEnded: () => void,
-      onError: (error: string) => void
+      onError: (error: string) => void,
     ): Promise<void> => {
-      // Stop any currently playing audio
-      await stopCurrentAudio();
+      // Stop any currently playing audio (without killing backend prefetches)
+      stopLocalAudio();
 
       // Create a unique ID for this play attempt
       let isCurrentPlayAttempt = true;
@@ -47,8 +121,15 @@ export function useAudioManager() {
         isCurrentPlayAttempt = false;
       };
 
-      // Create and configure audio element
-      const audio = new Audio(audioUrl);
+      // Reuse the pre-buffered element for this sentence if we have one
+      let audio = preparedRef.current.get(index);
+      preparedRef.current.delete(index);
+      if (audio && audio.src === audioUrl) {
+        audio.currentTime = 0;
+      } else {
+        if (audio) releasePrepared(audio);
+        audio = new Audio(audioUrl);
+      }
       audio.playbackRate = 1.0;
 
       // Set up event listeners
@@ -101,29 +182,21 @@ export function useAudioManager() {
         }
       }
     },
-    [stopCurrentAudio]
+    [stopLocalAudio, releasePrepared],
   );
 
   const cleanup = useCallback(() => {
-    // Clear any pending play promise
-    currentPlayPromiseRef.current = null;
-
-    // Stop current audio
-    if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
-      currentAudioRef.current.currentTime = 0;
-      currentAudioRef.current = null;
-    }
-
-    // Clear play attempt
-    if (currentPlayAttemptRef.current) {
-      currentPlayAttemptRef.current();
-      currentPlayAttemptRef.current = null;
-    }
-  }, []);
+    stopLocalAudio();
+    clearPrepared();
+  }, [stopLocalAudio, clearPrepared]);
 
   return {
     playAudio,
+    prepare,
+    prunePrepared,
+    clearPrepared,
+    clearPreparedAt,
+    stopLocalAudio,
     stopCurrentAudio,
     cleanup,
     getCurrentAudio: () => currentAudioRef.current,

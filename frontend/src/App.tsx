@@ -5,7 +5,8 @@ import {
   initialPlaybackState,
 } from "./reducers/playbackReducer";
 import { useAudioManager } from "./hooks/useAudioManager";
-import { useAudioCache } from "./hooks/useAudioCache";
+import { useAudioCache, LOOKAHEAD } from "./hooks/useAudioCache";
+import { AudioCacheEntry, PlaybackAction } from "./types";
 import { LoadingSpinner, ErrorMessage } from "./components/LoadingSpinner";
 import { SentenceItem } from "./components/SentenceItem";
 import { FloatingControls } from "./components/FloatingControls";
@@ -19,16 +20,35 @@ export default function App() {
   const [appState, dispatchApp] = useReducer(appReducer, initialAppState);
   const [playbackState, dispatchPlayback] = useReducer(
     playbackReducer,
-    initialPlaybackState
+    initialPlaybackState,
   );
 
-  const { playAudio, stopCurrentAudio, cleanup } = useAudioManager();
   const {
+    playAudio,
+    prepare,
+    prunePrepared,
+    clearPrepared,
+    clearPreparedAt,
+    stopCurrentAudio,
+    cleanup,
+  } = useAudioManager();
+
+  // Mirror the audio cache into app state so the UI can render from it; the
+  // hook itself keeps the authoritative copy in a ref.
+  const handleCacheChange = useCallback(
+    (newCache: Map<number, AudioCacheEntry>) => {
+      dispatchApp({ type: "SET_AUDIO_CACHE", payload: newCache });
+    },
+    [],
+  );
+
+  const {
+    getCache,
+    ensureAudio,
+    prefetchAhead,
     clearCacheEntry,
-    generateAudioForSentence,
-    preloadAdjacentSentences,
     cleanupAllCache,
-  } = useAudioCache();
+  } = useAudioCache(handleCacheChange);
 
   const {
     sentences,
@@ -46,9 +66,25 @@ export default function App() {
     availableTtsEngines,
   } = appState;
 
-  // Use ref to track current cache for cleanup without causing re-renders
-  const audioCacheRef = useRef(audioCache);
-  audioCacheRef.current = audioCache;
+  // Refs mirroring state that callbacks read, so handlePlay does not have to be
+  // re-created (and re-arm stale closures) on every cache write.
+  const playbackRef = useRef(playbackState);
+  playbackRef.current = playbackState;
+
+  // Dispatch that also updates the ref immediately, so callbacks firing before
+  // the next render (e.g. auto-advance on "ended") see the true playback state.
+  const dispatchPlaybackSync = useCallback((action: PlaybackAction) => {
+    playbackRef.current = playbackReducer(playbackRef.current, action);
+    dispatchPlayback(action);
+  }, []);
+
+  const isContinuousRef = useRef(isContinuousPlayback);
+  isContinuousRef.current = isContinuousPlayback;
+
+  // Lets the "ended" handler call the latest handlePlay without a dependency cycle.
+  const handlePlayRef = useRef<
+    ((index: number, isRetry?: boolean) => void) | undefined
+  >(undefined);
 
   // Ref for the sentence list container to enable auto-scrolling
   const sentenceListRef = useRef<HTMLDivElement>(null);
@@ -59,7 +95,7 @@ export default function App() {
 
     // Find the sentence element by its data attribute
     const sentenceElement = sentenceListRef.current.querySelector(
-      `[data-sentence-index="${index}"]`
+      `[data-sentence-index="${index}"]`,
     ) as HTMLElement;
 
     if (!sentenceElement) return;
@@ -82,7 +118,7 @@ export default function App() {
       dispatchApp({ type: "SET_ERROR", payload: null });
       dispatchApp({ type: "SET_LOADING", payload: true });
       dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
-      dispatchPlayback({ type: "RESET" });
+      dispatchPlaybackSync({ type: "RESET" });
       dispatchApp({ type: "SET_SENTENCES", payload: [] });
 
       // Store the PDF file for the viewer
@@ -104,7 +140,33 @@ export default function App() {
         dispatchApp({ type: "SET_LOADING", payload: false });
       }
     },
-    []
+    [dispatchPlaybackSync],
+  );
+
+  // Kick off generation + buffering of the next sentences while the current one
+  // plays, so the handoff at the end of a clip is instant. Fire-and-forget.
+  const schedulePrefetch = useCallback(
+    (index: number) => {
+      prunePrepared(index);
+      prefetchAhead(
+        index,
+        sentences,
+        speechSpeed,
+        selectedVoiceId,
+        LOOKAHEAD,
+        (readyIndex, entry) => prepare(readyIndex, entry.url),
+      ).catch((err: any) => {
+        console.warn("Prefetch failed:", err);
+      });
+    },
+    [
+      prefetchAhead,
+      sentences,
+      speechSpeed,
+      selectedVoiceId,
+      prepare,
+      prunePrepared,
+    ],
   );
 
   // Audio playback handler
@@ -112,126 +174,105 @@ export default function App() {
     async (index: number, isRetry: boolean = false) => {
       if (!sentences[index]) return;
 
+      const playback = playbackRef.current;
+
       // Allow switching to a different sentence even if currently playing
       const isSwitchingSentence =
-        playbackState.status === "playing" &&
-        playbackState.currentIndex !== index;
+        playback.status === "playing" && playback.currentIndex !== index;
 
-      if (playbackState.status === "playing" && !isSwitchingSentence) {
-        return;
-      }
-
-      // Prevent multiple audio generation attempts for the same sentence
-      if (generatingAudioIndex === index) {
+      if (playback.status === "playing" && !isSwitchingSentence) {
         return;
       }
 
       try {
-        let audioUrl: string;
-        let filename: string;
+        const cachedAudio = !isRetry ? getCache().get(index) : null;
 
-        // Check if audio is already cached (but skip cache if this is a retry)
-        const cachedAudio = !isRetry ? audioCache.get(index) : null;
-        if (cachedAudio) {
-          audioUrl = cachedAudio.url;
-          filename = cachedAudio.filename;
-        } else {
-          // Not cached or retry, generate it
+        // Only show the spinner on a genuine cache miss - prefetched sentences
+        // should never flash it.
+        if (!cachedAudio) {
           dispatchApp({ type: "SET_GENERATING_AUDIO_INDEX", payload: index });
+        }
 
-          try {
-            const audioUrlResult = await generateAudioForSentence(
-              sentences[index],
-              speechSpeed,
-              index,
-              audioCache,
-              (newCache) =>
-                dispatchApp({ type: "SET_AUDIO_CACHE", payload: newCache }),
-              selectedVoiceId
-            );
-
-            if (!audioUrlResult) {
-              throw new Error("Failed to generate audio");
-            }
-
-            audioUrl = audioUrlResult;
-            // Get the filename from the latest cache
-            const latestEntry = audioCache.get(index);
-            filename = latestEntry?.filename || "";
-          } finally {
+        let entry;
+        try {
+          entry = await ensureAudio(
+            index,
+            sentences[index],
+            speechSpeed,
+            selectedVoiceId,
+            { force: isRetry },
+          );
+        } finally {
+          if (!cachedAudio) {
             dispatchApp({ type: "SET_GENERATING_AUDIO_INDEX", payload: null });
           }
         }
 
+        if (!entry) {
+          throw new Error("Failed to generate audio");
+        }
+
         // Set playing state before starting audio
-        dispatchPlayback({ type: "PLAY", payload: index });
+        dispatchPlaybackSync({ type: "PLAY", payload: index });
+
+        // Start filling the buffer for the sentences after this one right away.
+        schedulePrefetch(index);
 
         await playAudio(
-          audioUrl,
-          filename,
+          index,
+          entry.url,
+          entry.filename,
           () => {
             // On audio ended
-            dispatchPlayback({ type: "STOP" }); // If in continuous playback mode, automatically play next sentence
-            if (isContinuousPlayback && index + 1 < sentences.length) {
-              // Use setTimeout to avoid recursive calls and allow state to update
-              setTimeout(() => {
-                handlePlay(index + 1);
-              }, 100);
-            } else if (isContinuousPlayback && index + 1 >= sentences.length) {
+            dispatchPlaybackSync({ type: "STOP" });
+
+            // If in continuous playback mode, immediately play the next sentence
+            if (isContinuousRef.current && index + 1 < sentences.length) {
+              handlePlayRef.current?.(index + 1);
+            } else if (
+              isContinuousRef.current &&
+              index + 1 >= sentences.length
+            ) {
               // Reached the end, disable continuous playback
               dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
             }
-
-            // Preload adjacent sentences for smooth navigation
-            preloadAdjacentSentences(
-              index,
-              sentences,
-              audioCache,
-              speechSpeed,
-              (newCache) =>
-                dispatchApp({ type: "SET_AUDIO_CACHE", payload: newCache }),
-              selectedVoiceId
-            ).catch((err: any) => {
-              console.warn("Post-playback preload failed:", err);
-            });
           },
           (errorMessage: string) => {
             // On audio error
-            dispatchPlayback({ type: "STOP" });
+            dispatchPlaybackSync({ type: "STOP" });
 
-            // If this was cached audio that failed and it's not already a retry, try regenerating once
+            // If this was cached audio that failed and it's not already a retry,
+            // try regenerating once
             if (cachedAudio && !isRetry) {
-              clearCacheEntry(audioCache, index, (newCache) =>
-                dispatchApp({ type: "SET_AUDIO_CACHE", payload: newCache })
-              );
-
-              // Try regenerating the audio once
-              handlePlay(index, true);
+              clearCacheEntry(index);
+              clearPreparedAt(index);
+              handlePlayRef.current?.(index, true);
               return;
             }
 
             dispatchApp({ type: "SET_ERROR", payload: errorMessage });
-          }
+          },
         );
       } catch (err: any) {
-        dispatchPlayback({ type: "STOP" });
+        dispatchPlaybackSync({ type: "STOP" });
         dispatchApp({ type: "SET_ERROR", payload: err.message });
       }
     },
     [
       sentences,
       speechSpeed,
-      playbackState,
-      generatingAudioIndex,
-      audioCache,
-      isContinuousPlayback,
       selectedVoiceId,
+      getCache,
+      ensureAudio,
       playAudio,
-      generateAudioForSentence,
-      preloadAdjacentSentences,
+      schedulePrefetch,
       clearCacheEntry,
-    ]
+      clearPreparedAt,
+      dispatchPlaybackSync,
+    ],
   );
+
+  handlePlayRef.current = handlePlay;
 
   const handleStop = useCallback(async () => {
     try {
@@ -242,11 +283,9 @@ export default function App() {
       await stopCurrentAudio();
 
       // Clear frontend cache
-      if (audioCacheRef.current.size > 0) {
-        console.log("Clearing frontend audio cache...");
-        cleanupAllCache(audioCacheRef.current);
-        dispatchApp({ type: "CLEAR_CACHE" });
-      }
+      console.log("Clearing frontend audio cache...");
+      cleanupAllCache();
+      clearPrepared();
 
       // Clear backend cache
       console.log("Clearing backend audio cache...");
@@ -255,14 +294,14 @@ export default function App() {
 
       // Reset states
       dispatchApp({ type: "SET_GENERATING_AUDIO_INDEX", payload: null });
-      dispatchPlayback({ type: "STOP" });
+      dispatchPlaybackSync({ type: "STOP" });
     } catch (error) {
       console.error("Error during cache reset:", error);
       // Still reset the states even if cache clearing fails
       dispatchApp({ type: "SET_GENERATING_AUDIO_INDEX", payload: null });
-      dispatchPlayback({ type: "STOP" });
+      dispatchPlaybackSync({ type: "STOP" });
     }
-  }, [stopCurrentAudio, cleanupAllCache]);
+  }, [stopCurrentAudio, cleanupAllCache, clearPrepared, dispatchPlaybackSync]);
 
   // Simple pause function that doesn't clear cache
   const handlePause = useCallback(async () => {
@@ -272,25 +311,31 @@ export default function App() {
 
       // Stop current audio playback without clearing cache
       await stopCurrentAudio();
-      dispatchPlayback({ type: "STOP" });
+      dispatchPlaybackSync({ type: "STOP" });
     } catch (error) {
       console.error("Error during pause:", error);
-      dispatchPlayback({ type: "STOP" });
+      dispatchPlaybackSync({ type: "STOP" });
     }
-  }, [stopCurrentAudio]);
+  }, [stopCurrentAudio, dispatchPlaybackSync]);
 
   const handlePlayPause = useCallback(() => {
     if (playbackState.status === "playing") {
       // If currently playing, just stop audio without clearing cache
       dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
       stopCurrentAudio();
-      dispatchPlayback({ type: "STOP" });
+      dispatchPlaybackSync({ type: "STOP" });
     } else if (sentences.length > 0) {
       // Start continuous playback from current position
       dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: true });
       handlePlay(playbackState.currentIndex);
     }
-  }, [playbackState, sentences, handlePlay, stopCurrentAudio]);
+  }, [
+    playbackState,
+    sentences,
+    handlePlay,
+    stopCurrentAudio,
+    dispatchPlaybackSync,
+  ]);
 
   const handleNext = useCallback(() => {
     const nextIndex = playbackState.currentIndex + 1;
@@ -320,11 +365,11 @@ export default function App() {
 
   // Stable cleanup function to avoid dependencies issues
   const stableCleanupCache = useCallback(() => {
-    if (audioCacheRef.current.size > 0) {
-      cleanupAllCache(audioCacheRef.current);
-      dispatchApp({ type: "CLEAR_CACHE" });
-    }
-  }, [cleanupAllCache]);
+    // Prepared elements hold audio generated at the old speed/voice, so they
+    // have to go whenever the cache does.
+    clearPrepared();
+    cleanupAllCache();
+  }, [cleanupAllCache, clearPrepared]);
 
   const handleTtsEngineChange = useCallback(
     async (engine: "pyttsx3" | "piper") => {
@@ -352,7 +397,7 @@ export default function App() {
 
           // Set the first voice of the new engine as default
           const newEngineVoices = voicesData.voices.filter(
-            (v) => v.engine === engine
+            (v) => v.engine === engine,
           );
           if (newEngineVoices.length > 0) {
             let defaultVoice = newEngineVoices[0];
@@ -360,7 +405,7 @@ export default function App() {
             // If switching to Piper, try to find Cori voice
             if (engine === "piper") {
               const coriVoice = newEngineVoices.find((v) =>
-                v.id.toLowerCase().includes("cori")
+                v.id.toLowerCase().includes("cori"),
               );
               if (coriVoice) {
                 defaultVoice = coriVoice;
@@ -379,7 +424,7 @@ export default function App() {
         dispatchApp({ type: "SET_VOICES_LOADING", payload: false });
       }
     },
-    [stableCleanupCache]
+    [stableCleanupCache],
   );
 
   const handleDismissError = useCallback(() => {
@@ -400,9 +445,7 @@ export default function App() {
   useEffect(() => {
     return () => {
       cleanup();
-      if (audioCacheRef.current.size > 0) {
-        cleanupAllCache(audioCacheRef.current);
-      }
+      cleanupAllCache();
     };
   }, [cleanup, cleanupAllCache]);
 
@@ -471,7 +514,7 @@ export default function App() {
           if (!selectedVoiceId && voicesData.voices.length > 0) {
             // Find the first voice for the current engine
             const currentEngineVoices = voicesData.voices.filter(
-              (v) => v.engine === voicesData.currentEngine
+              (v) => v.engine === voicesData.currentEngine,
             );
 
             if (currentEngineVoices.length > 0) {
@@ -480,7 +523,7 @@ export default function App() {
               // If using Piper, try to find Cori voice
               if (voicesData.currentEngine === "piper") {
                 const coriVoice = currentEngineVoices.find((v) =>
-                  v.id.toLowerCase().includes("cori")
+                  v.id.toLowerCase().includes("cori"),
                 );
                 if (coriVoice) {
                   defaultVoice = coriVoice;
