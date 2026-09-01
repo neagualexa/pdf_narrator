@@ -68,6 +68,12 @@ def get_pyttsx3_voices():
                 'engine': 'pyttsx3',
                 'type': 'system'
             }
+            # macOS reports some voices with an unresolved display name (e.g.
+            # "Aru ((null))"). They are not usable, so drop them rather than
+            # showing a broken entry in the picker.
+            if "(null)" in voice.name:
+                continue
+
             # Only include high priority voices (priority 1)
             if get_voice_priority(voice_info) == 1:
                 voice_list.append(voice_info)

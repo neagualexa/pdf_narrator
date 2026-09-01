@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef } from "react";
 import { VoiceControlsProps } from "../types";
 import StyledButton from "./StyledButton";
 
+/** The rate the backend treats as 1x (audio.ts divides by 180). */
+const NORMAL_SPEED = 180;
+
 export const VoiceControls: React.FC<VoiceControlsProps> = ({
   selectedVoiceId,
   onVoiceChange,
@@ -11,6 +14,8 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
   isLoading,
   currentTtsEngine,
   onTtsEngineChange,
+  onPlayDemo,
+  isDemoLoading,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const selectedVoice = voices.find((voice) => voice.id === selectedVoiceId);
@@ -180,14 +185,24 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
 
             {/* Speed Control */}
             <div className="speed-control">
-              <label htmlFor="speed-slider" className="speed-label">
-                Speed: {Math.round(speechSpeed)}%
-              </label>
+              <div className="speed-header">
+                <label htmlFor="speed-slider" className="speed-label">
+                  Speed: {Math.round(speechSpeed)} WPM
+                </label>
+                <StyledButton
+                  type="secondary"
+                  onClick={() => onSpeedChange(NORMAL_SPEED)}
+                  disabled={speechSpeed === NORMAL_SPEED}
+                  title={`1x - normal speed (${NORMAL_SPEED} WPM)`}
+                >
+                  1&times;
+                </StyledButton>
+              </div>
               <div className="speed-controls">
                 <StyledButton
                   type="primary"
                   onClick={() => onSpeedChange(Math.max(50, speechSpeed - 10))}
-                  title="Decrease speed by 10%"
+                  title="Decrease speed by 10 WPM"
                   disabled={speechSpeed <= 50}
                 >
                   <svg
@@ -213,7 +228,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
                 <StyledButton
                   type="primary"
                   onClick={() => onSpeedChange(Math.min(300, speechSpeed + 10))}
-                  title="Increase speed by 10%"
+                  title="Increase speed by 10 WPM"
                   disabled={speechSpeed >= 300}
                 >
                   <svg
@@ -225,6 +240,26 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
                     <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
                   </svg>
                 </StyledButton>
+                <span data-demo-control style={{ display: "flex" }}>
+                  <StyledButton
+                    type="secondary"
+                    onClick={onPlayDemo}
+                    loading={isDemoLoading}
+                    title="Preview this voice at this speed"
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      fill="currentColor"
+                      viewBox="0 0 16 16"
+                      aria-hidden="true"
+                    >
+                      <path d="M11.536 14.01A8.473 8.473 0 0 0 14.026 8a8.473 8.473 0 0 0-2.49-6.01l-.708.707A7.476 7.476 0 0 1 13.025 8c0 2.071-.84 3.946-2.197 5.303l.708.707z" />
+                      <path d="M10.121 12.596A6.48 6.48 0 0 0 12.025 8a6.48 6.48 0 0 0-1.904-4.596l-.707.707A5.483 5.483 0 0 1 11.025 8a5.483 5.483 0 0 1-1.61 3.89l.706.706z" />
+                      <path d="M8.707 11.182A4.486 4.486 0 0 0 10.025 8a4.486 4.486 0 0 0-1.318-3.182L8 5.525A3.489 3.489 0 0 1 9.025 8 3.49 3.49 0 0 1 8 10.475l.707.707zM6.717 3.55A.5.5 0 0 1 7 4v8a.5.5 0 0 1-.812.39L3.825 10.5H1.5A.5.5 0 0 1 1 10V6a.5.5 0 0 1 .5-.5h2.325l2.363-1.89a.5.5 0 0 1 .529-.06z" />
+                    </svg>
+                  </StyledButton>
+                </span>
               </div>
             </div>
           </div>

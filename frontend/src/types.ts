@@ -103,4 +103,7 @@ export interface VoiceControlsProps {
   isLoading: boolean;
   currentTtsEngine: "pyttsx3" | "piper";
   onTtsEngineChange: (engine: "pyttsx3" | "piper") => void;
+  /** Speaks a short sample in the current voice at the current rate. */
+  onPlayDemo: () => void;
+  isDemoLoading: boolean;
 }

@@ -18,16 +18,49 @@ import { SentenceItem } from "./components/SentenceItem";
 import { TransportBar } from "./components/TransportBar";
 import { VoiceControls } from "./components/VoiceControls";
 import { PdfViewer } from "./components/PdfViewer";
+import { useMediaQuery } from "./hooks/useMediaQuery";
+import { displayVoiceName } from "./voiceName";
 import StyledButton from "./components/StyledButton";
 import * as api from "./api";
 import "./styles";
 
 const SPLIT_STORAGE_KEY = "pdf-narrator:split-percent";
+const SETTINGS_STORAGE_KEY = "pdf-narrator:settings";
 const MIN_SPLIT = 25;
 const MAX_SPLIT = 75;
 
+/** Below this the two panes cannot both be usable, so they become tabs. */
+const NARROW_QUERY = "(max-width: 1024px)";
+
+const DEMO_SENTENCE_PREFIX = "Hello, how are you? I am";
+const DEMO_SENTENCE_SUFFIX = "and the weather outside is lovely.";
+
+interface StoredSettings {
+  engine?: "pyttsx3" | "piper";
+  voiceId?: string | null;
+  speed?: number;
+}
+
+function readStoredSettings(): StoredSettings {
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as StoredSettings) : {};
+  } catch {
+    return {};
+  }
+}
+
 export default function App() {
-  const [appState, dispatchApp] = useReducer(appReducer, initialAppState);
+  const [appState, dispatchApp] = useReducer(
+    appReducer,
+    initialAppState,
+    (base) => {
+      const stored = readStoredSettings();
+      return typeof stored.speed === "number"
+        ? { ...base, speechSpeed: stored.speed }
+        : base;
+    },
+  );
   const [playbackState, dispatchPlayback] = useReducer(
     playbackReducer,
     initialPlaybackState,
@@ -75,7 +108,6 @@ export default function App() {
     availableVoices,
     voicesLoading,
     currentTtsEngine,
-    availableTtsEngines,
   } = appState;
 
   // Refs mirroring state that callbacks read, so handlePlay does not have to be
@@ -447,6 +479,82 @@ export default function App() {
     [stableCleanupCache],
   );
 
+  // --- Voice demo ----------------------------------------------------------
+  // Uses its own audio element so previewing a voice never disturbs the
+  // narration's playback state or its prefetch buffer.
+  const demoAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [isDemoLoading, setIsDemoLoading] = useState(false);
+
+  // Bumped on every stop. An in-flight generation compares the token it
+  // started with and bails if it has been superseded, so a slow request
+  // cannot start playing after the demo was cancelled - which is how demos
+  // ended up talking over each other.
+  const demoTokenRef = useRef(0);
+
+  const stopDemo = useCallback(() => {
+    demoTokenRef.current += 1;
+
+    const audio = demoAudioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+      demoAudioRef.current = null;
+    }
+
+    setIsDemoLoading(false);
+  }, []);
+
+  const handlePlayDemo = useCallback(async () => {
+    stopDemo();
+    const token = demoTokenRef.current;
+
+    const rawName = availableVoices.find((v) => v.id === selectedVoiceId)?.name;
+    const voiceName = rawName ? displayVoiceName(rawName) : "your narrator";
+    const text = `${DEMO_SENTENCE_PREFIX} ${voiceName}, ${DEMO_SENTENCE_SUFFIX}`;
+
+    try {
+      setIsDemoLoading(true);
+
+      // Index -1 keeps the demo out of the sentence cache's numbering.
+      const result = await api.generateAudioIndexed(
+        text,
+        speechSpeed,
+        -1,
+        selectedVoiceId ?? undefined,
+      );
+
+      if (token !== demoTokenRef.current) return;
+
+      const audio = new Audio(result.audioUrl);
+      demoAudioRef.current = audio;
+      await audio.play();
+    } catch (err) {
+      console.warn("Voice demo failed:", err);
+    } finally {
+      if (token === demoTokenRef.current) setIsDemoLoading(false);
+    }
+  }, [availableVoices, selectedVoiceId, speechSpeed, stopDemo]);
+
+  // Any interaction anywhere else in the UI cuts the demo off immediately.
+  // Capture phase, so it runs before the control's own handler; the Preview
+  // button marks itself exempt so it can restart the demo rather than kill it.
+  useEffect(() => {
+    const onInteract = (event: Event) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-demo-control]")) return;
+      stopDemo();
+    };
+
+    document.addEventListener("pointerdown", onInteract, true);
+    document.addEventListener("keydown", onInteract, true);
+    return () => {
+      document.removeEventListener("pointerdown", onInteract, true);
+      document.removeEventListener("keydown", onInteract, true);
+    };
+  }, [stopDemo]);
+
+  useEffect(() => stopDemo, [stopDemo]);
+
   const handleDismissError = useCallback(() => {
     dispatchApp({ type: "SET_ERROR", payload: null });
   }, []);
@@ -520,68 +628,69 @@ export default function App() {
     };
   }, [sentences.length, handleNext, handlePrevious, handlePlayPause]);
 
-  // Load available voices and TTS engine info on component mount
+  // Load voices and TTS engine on mount, honouring anything the user chose in
+  // a previous session. The engine is backend state, so a stored choice has to
+  // be pushed to the server, not merely reflected in the UI.
+  const didRestoreSettings = useRef(false);
+
   useEffect(() => {
+    if (didRestoreSettings.current) return;
+    didRestoreSettings.current = true;
+
     async function loadVoices() {
       try {
         dispatchApp({ type: "SET_VOICES_LOADING", payload: true });
+        const stored = readStoredSettings();
 
-        // Get current TTS engine
         const engineData = await api.getTtsEngine();
+        let engine: "pyttsx3" | "piper" = "piper";
+
         if (engineData.success) {
-          dispatchApp({
-            type: "SET_CURRENT_TTS_ENGINE",
-            payload: engineData.currentEngine as "pyttsx3" | "piper",
-          });
+          engine = engineData.currentEngine as "pyttsx3" | "piper";
           dispatchApp({
             type: "SET_AVAILABLE_TTS_ENGINES",
             payload: engineData.availableEngines,
           });
-        }
 
-        // Get available voices
-        const voicesData = await api.getAvailableVoices();
-        if (voicesData.success) {
-          dispatchApp({
-            type: "SET_AVAILABLE_VOICES",
-            payload: voicesData.voices,
-          });
-
-          // Set the first voice as default if none selected
-          if (!selectedVoiceId && voicesData.voices.length > 0) {
-            // Find the first voice for the current engine
-            const currentEngineVoices = voicesData.voices.filter(
-              (v) => v.engine === voicesData.currentEngine,
-            );
-
-            if (currentEngineVoices.length > 0) {
-              let defaultVoice = currentEngineVoices[0];
-
-              // If using Piper, try to find Cori voice
-              if (voicesData.currentEngine === "piper") {
-                const coriVoice = currentEngineVoices.find((v) =>
-                  v.id.toLowerCase().includes("cori"),
-                );
-                if (coriVoice) {
-                  defaultVoice = coriVoice;
-                }
-              }
-
-              dispatchApp({
-                type: "SET_SELECTED_VOICE",
-                payload: defaultVoice.id,
-              });
-            } else {
-              // Fallback to first voice
-              dispatchApp({
-                type: "SET_SELECTED_VOICE",
-                payload: voicesData.voices[0].id,
-              });
-            }
+          if (
+            stored.engine &&
+            stored.engine !== engine &&
+            engineData.availableEngines.includes(stored.engine)
+          ) {
+            await api.setTtsEngine(stored.engine);
+            engine = stored.engine;
           }
-        } else {
-          console.warn("Failed to load voices:", voicesData);
         }
+
+        dispatchApp({ type: "SET_CURRENT_TTS_ENGINE", payload: engine });
+
+        const voicesData = await api.getAvailableVoices();
+        if (!voicesData.success) {
+          console.warn("Failed to load voices:", voicesData);
+          return;
+        }
+
+        dispatchApp({
+          type: "SET_AVAILABLE_VOICES",
+          payload: voicesData.voices,
+        });
+
+        const engineVoices = voicesData.voices.filter(
+          (v) => v.engine === engine,
+        );
+        const pool = engineVoices.length > 0 ? engineVoices : voicesData.voices;
+        if (pool.length === 0) return;
+
+        const restored =
+          stored.voiceId && pool.find((v) => v.id === stored.voiceId);
+
+        let chosen = restored || pool[0];
+        if (!restored && engine === "piper") {
+          const cori = pool.find((v) => v.id.toLowerCase().includes("cori"));
+          if (cori) chosen = cori;
+        }
+
+        dispatchApp({ type: "SET_SELECTED_VOICE", payload: chosen.id });
       } catch (error) {
         console.error("Error loading voices:", error);
       } finally {
@@ -590,7 +699,25 @@ export default function App() {
     }
 
     loadVoices();
-  }, [selectedVoiceId]);
+  }, []);
+
+  // Persist the settings that should survive a reload. Skipped until the
+  // restore above has run, so an empty initial state cannot overwrite them.
+  useEffect(() => {
+    if (!didRestoreSettings.current || voicesLoading) return;
+    try {
+      window.localStorage.setItem(
+        SETTINGS_STORAGE_KEY,
+        JSON.stringify({
+          engine: currentTtsEngine,
+          voiceId: selectedVoiceId,
+          speed: speechSpeed,
+        }),
+      );
+    } catch {
+      // Storage can be unavailable (private mode); settings just won't persist.
+    }
+  }, [currentTtsEngine, selectedVoiceId, speechSpeed, voicesLoading]);
 
   // Drive the active sentence's progress bar by writing a CSS custom property
   // on the list container. Going through the DOM rather than React state keeps
@@ -634,6 +761,11 @@ export default function App() {
   }, [playbackState.status, playbackState.currentIndex, scrollToSentence]);
 
   const hasDocument = sentences.length > 0;
+
+  const isNarrow = useMediaQuery(NARROW_QUERY);
+  const [activePane, setActivePane] = useState<"sentences" | "document">(
+    "sentences",
+  );
 
   // --- Resizable split between the two panes -------------------------------
   const appBodyRef = useRef<HTMLDivElement>(null);
@@ -732,6 +864,16 @@ export default function App() {
       {error && <ErrorMessage message={error} onDismiss={handleDismissError} />}
       {fileInput}
 
+      <div className="sr-only" role="status" aria-live="polite">
+        {generatingAudioIndex !== null
+          ? `Generating audio for sentence ${generatingAudioIndex + 1}`
+          : playbackState.status === "playing"
+          ? `Playing sentence ${playbackState.currentIndex + 1} of ${
+              sentences.length
+            }`
+          : ""}
+      </div>
+
       <header className="app-bar">
         <h1 className="app-bar-title">PDF to Audio Converter</h1>
 
@@ -771,16 +913,48 @@ export default function App() {
             isLoading={voicesLoading}
             currentTtsEngine={currentTtsEngine}
             onTtsEngineChange={handleTtsEngineChange}
+            onPlayDemo={handlePlayDemo}
+            isDemoLoading={isDemoLoading}
           />
         </div>
       </header>
 
+      {isNarrow && (
+        <div className="pane-tabs" role="tablist" aria-label="Panes">
+          <button
+            type="button"
+            role="tab"
+            className={`pane-tab ${activePane === "sentences" ? "is-active" : ""}`}
+            aria-selected={activePane === "sentences"}
+            onClick={() => setActivePane("sentences")}
+          >
+            Sentences
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={`pane-tab ${activePane === "document" ? "is-active" : ""}`}
+            aria-selected={activePane === "document"}
+            onClick={() => setActivePane("document")}
+          >
+            Document
+          </button>
+        </div>
+      )}
+
       <div
         className="app-body"
         ref={appBodyRef}
-        style={{
-          gridTemplateColumns: `${splitPercent}% 0.5rem minmax(0, 1fr)`,
-        }}
+        data-active-pane={isNarrow ? activePane : undefined}
+        style={
+          // Inline styles beat the stylesheet, so the split is only applied
+          // when there actually are two side-by-side panes.
+          isNarrow
+            ? undefined
+            : {
+                gridTemplateColumns: `${splitPercent}% 0.5rem minmax(0, 1fr)`,
+              }
+        }
       >
         <section className="pane pane-sentences">
           {hasDocument ? (

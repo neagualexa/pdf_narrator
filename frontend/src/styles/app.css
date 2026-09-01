@@ -122,17 +122,20 @@ body {
 }
 
 /* Full-height app shell: app bar over a two-pane body that fills the viewport.
-   The page itself never scrolls - each pane owns its own scroll context. */
+   The page itself never scrolls - each pane owns its own scroll context.
+   Flex column rather than fixed grid rows, because the number of children
+   varies: the tab bar only exists on narrow viewports. */
 .app-shell {
   height: 100dvh;
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background-color: var(--color-background);
 }
 
 /* App Bar */
 .app-bar {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 1rem;
@@ -184,6 +187,7 @@ body {
 /* Two-pane body. minmax(0,1fr) + min-height:0 are what let the children
    scroll instead of stretching the grid. */
 .app-body {
+  flex: 1 1 auto;
   display: grid;
   /* Columns are set inline from the split state; this is the pre-hydration
      fallback and the shape the inline value follows. */
@@ -710,33 +714,7 @@ body.is-resizing {
   background-color: var(--emerald-500);
 }
 
-/* Speed Controls */
-.speed-control {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.5rem;
-  border-right: 1px solid var(--teal-100);
-  margin-right: 0.5rem;
-}
-
-.speed-label {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 0.75rem;
-  color: var(--color-text-primary);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.speed-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-}
-
+/* Speed slider (the surrounding layout lives with the voice panel) */
 .speed-slider {
   width: 60px;
   height: 4px;
@@ -891,22 +869,33 @@ body.is-resizing {
 .voice-controls-panel .speed-control {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  align-items: stretch;
+  gap: 0.75rem;
 }
 
 .voice-controls-panel .speed-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   font-weight: 600;
   color: var(--color-text-primary);
   font-size: 14px;
 }
 
+/* Rate readout and the 1x reset sit on one line above the slider. */
+.speed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 .voice-controls-panel .speed-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 0.5rem;
+}
+
+/* Set the preview slightly apart from the rate controls it sits beside. */
+.voice-controls-panel .speed-controls [data-demo-control] {
+  margin-left: 0.25rem;
 }
 
 .voice-controls-panel .speed-slider {
@@ -1058,6 +1047,130 @@ body.is-resizing {
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* ==========================================================================
+   Accessibility helpers
+   ========================================================================== */
+
+/* Visible to assistive tech only - used by the now-playing live region. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ==========================================================================
+   Narrow layout - below 1024px the two panes cannot both be usable, so they
+   become tabs. App.tsx drops the inline grid-template-columns at the same
+   breakpoint, since an inline style would win over these rules.
+   ========================================================================== */
+
+.pane-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.5rem 1rem;
+  background-color: var(--color-card-bg);
+  border-bottom: 1px solid var(--color-border);
+  z-index: var(--z-sticky);
+}
+
+.pane-tab {
+  flex: 1;
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background-color: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.pane-tab:hover {
+  background-color: var(--teal-50);
+  color: var(--color-text-primary);
+}
+
+.pane-tab.is-active {
+  background-color: var(--teal-600);
+  color: white;
+}
+
+.pane-tab:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1024px) {
+  .app-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The divider has nothing to divide once the panes are stacked. */
+  .pane-divider {
+    display: none;
+  }
+
+  .app-body[data-active-pane="sentences"] .pane-document,
+  .app-body[data-active-pane="document"] .pane-sentences {
+    display: none;
+  }
+
+  .pane-document {
+    padding: 0.5rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-bar {
+    gap: 0.5rem;
+    padding: 0.625rem 0.75rem;
+  }
+
+  .app-bar-title {
+    font-size: 0.9375rem;
+  }
+
+  /* The file name is the first thing worth losing when space runs out. */
+  .app-bar-file {
+    display: none;
+  }
+
+  .sentence-list {
+    padding: 0.5rem 0.75rem 0.5rem 0.25rem;
+  }
+
+  .sentence-item {
+    grid-template-columns: 1.5rem minmax(0, 1fr) 1.25rem;
+    gap: 0.5rem;
+  }
+
+  .sentence-text {
+    font-size: 1rem;
+  }
+
+  .transport-bar {
+    padding: 0.5rem 0.75rem;
+  }
+
+  /* Keep the transport controls; drop the readouts that would wrap it. */
+  .transport-status {
+    display: none;
+  }
+
+  .voice-controls-popover {
+    width: min(300px, calc(100vw - 1.5rem));
   }
 }
 
