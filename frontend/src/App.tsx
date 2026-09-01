@@ -31,6 +31,7 @@ export default function App() {
     clearPreparedAt,
     stopCurrentAudio,
     cleanup,
+    getCurrentAudio,
   } = useAudioManager();
 
   // Mirror the audio cache into app state so the UI can render from it; the
@@ -100,9 +101,15 @@ export default function App() {
 
     if (!sentenceElement) return;
 
-    // Use scrollIntoView with block: 'center' for proper centering within the container
+    // Use scrollIntoView with block: 'center' for proper centering within the
+    // container. CSS scroll-behavior cannot override this argument, so the
+    // reduced-motion preference has to be read here too.
+    const prefersReducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+
     sentenceElement.scrollIntoView({
-      behavior: "smooth",
+      behavior: prefersReducedMotion ? "auto" : "smooth",
       block: "center",
       inline: "nearest",
     });
@@ -455,6 +462,18 @@ export default function App() {
       // Only handle arrow keys if we have sentences
       if (sentences.length === 0) return;
 
+      const target = event.target as HTMLElement | null;
+
+      // Never steal keys from a form control (e.g. the voice dropdown).
+      if (target?.closest("input, select, textarea, [contenteditable='true']")) {
+        return;
+      }
+
+      // Space natively activates a focused button - including a sentence row -
+      // so letting it through here would fire that action and global
+      // play/pause at the same time.
+      if (event.key === " " && target?.closest("button")) return;
+
       // Prevent default behavior for arrow keys to avoid page scrolling
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
@@ -554,6 +573,35 @@ export default function App() {
 
     loadVoices();
   }, [selectedVoiceId]);
+
+  // Drive the active sentence's progress bar by writing a CSS custom property
+  // on the list container. Going through the DOM rather than React state keeps
+  // a 60fps update from re-rendering several hundred sentence rows.
+  useEffect(() => {
+    const list = sentenceListRef.current;
+    if (!list) return;
+
+    const reset = () => list.style.setProperty("--sentence-progress", "0");
+
+    if (playbackState.status !== "playing") {
+      reset();
+      return;
+    }
+
+    let frame = requestAnimationFrame(function tick() {
+      const audio = getCurrentAudio();
+      if (audio && Number.isFinite(audio.duration) && audio.duration > 0) {
+        const ratio = Math.min(audio.currentTime / audio.duration, 1);
+        list.style.setProperty("--sentence-progress", ratio.toFixed(4));
+      }
+      frame = requestAnimationFrame(tick);
+    });
+
+    return () => {
+      cancelAnimationFrame(frame);
+      reset();
+    };
+  }, [playbackState.status, playbackState.currentIndex, getCurrentAudio]);
 
   // Auto-scroll to the currently playing sentence
   useEffect(() => {
@@ -675,6 +723,8 @@ export default function App() {
                 onStop={handleStop}
                 isPlaying={playbackState.status === "playing"}
                 cachedCount={audioCache.size}
+                currentIndex={playbackState.currentIndex}
+                totalSentences={sentences.length}
               />
             </>
           ) : (

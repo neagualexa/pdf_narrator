@@ -70,6 +70,9 @@ export interface TransportBarProps {
   isPlaying: boolean;
   /** Sentences with audio already generated - drives the buffering indicator. */
   cachedCount: number;
+  /** Zero-based playback cursor, shown as a 1-based position. */
+  currentIndex: number;
+  totalSentences: number;
 }
 
 export interface ErrorMessageProps {

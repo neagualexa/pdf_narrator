@@ -276,37 +276,116 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.125rem;
   overflow-y: auto;
-  padding: 0.75rem 1.25rem;
+  padding: 0.75rem 1.25rem 0.75rem 0.75rem;
   scroll-behavior: smooth;
   scroll-padding-top: 2rem;
   scroll-padding-bottom: 2rem;
 }
 
-/* Sentence Items */
+/* Sentence Items - a transcript row: index gutter, text, hover-revealed action.
+   The row is the <button>, so there is no nested interactive element. */
 .sentence-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1rem;
-  border-radius: 0.5rem;
-  transition: all 0.3s;
+  position: relative;
+  display: grid;
+  grid-template-columns: 2.25rem minmax(0, 1fr) 1.5rem;
+  align-items: baseline;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.4rem 0.75rem;
+  border: none;
+  border-radius: 0.375rem;
+  background-color: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  /* overflow:hidden clips ::before/::after to the radius, but it also zeroes a
+     flex item's automatic minimum size - without flex-shrink:0 every row
+     collapses to nothing in the scrolling column. */
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease;
 }
 
 .sentence-item:hover {
   background-color: var(--teal-50);
 }
 
+.sentence-item:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: -2px;
+}
+
+/* Index gutter */
+.sentence-index {
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--gray-400);
+  text-align: right;
+  user-select: none;
+}
+
+/* Neutral, measured text - this is what the user is here to read */
+.sentence-text {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--gray-800);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+}
+
+/* Action affordance - only present on hover/focus, or when it means something */
+.sentence-action {
+  align-self: start;
+  padding-top: 0.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--emerald-600);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.sentence-item:hover .sentence-action,
+.sentence-item:focus-visible .sentence-action,
+.sentence-item.playing .sentence-action,
+.sentence-item.generating .sentence-action {
+  opacity: 1;
+}
+
+/* Active row: one unambiguous accent bar. No lift, no infinite glow - both
+   fought with the auto-scroll that centres this row. */
 .sentence-item.playing {
-  background: var(--gradient-teal-light);
-  border: 2px solid var(--teal-500);
-  box-shadow: 0 8px 15px -3px rgba(20, 184, 166, 0.2),
-    0 4px 6px -2px rgba(20, 184, 166, 0.1);
-  transform: translateY(-2px);
-  animation: border-glow 3s ease-in-out infinite alternate;
-  position: relative;
-  z-index: 1;
+  background-color: var(--emerald-50);
+  /* the unfilled track the progress bar runs along */
+  box-shadow: inset 0 -3px 0 var(--emerald-100);
+}
+
+/* Elapsed position within the sentence currently being spoken. Driven by
+   --sentence-progress (0-1), which App writes on the list container each
+   animation frame; scaleX avoids a layout pass per frame. */
+.sentence-item.playing::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background-color: var(--emerald-500);
+  transform: scaleX(var(--sentence-progress, 0));
+  transform-origin: left center;
+}
+
+.sentence-item.playing::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 999px;
+  background-color: var(--emerald-500);
 }
 
 .sentence-item.playing .sentence-text {
@@ -314,26 +393,40 @@ body {
   font-weight: 600;
 }
 
-.sentence-item.last-played {
-  background: var(--gradient-emerald-light);
-  border: 1px solid var(--emerald-500);
-  box-shadow: 0 4px 8px -2px rgba(16, 185, 129, 0.1);
+.sentence-item.playing .sentence-index,
+.sentence-item.playing .sentence-action {
+  color: var(--emerald-600);
+  font-weight: 600;
 }
 
-.sentence-item.last-played .sentence-text {
-  color: var(--emerald-800);
-  font-weight: 500;
+/* Cursor position while idle - deliberately quiet so it cannot be mistaken
+   for the active row. */
+.sentence-item.last-played {
+  background-color: var(--gray-50);
+}
+
+.sentence-item.last-played::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 999px;
+  background-color: var(--gray-300);
 }
 
 .sentence-item.generating {
-  background: var(--gradient-teal-light);
-  border-left: 4px solid var(--teal-500);
+  background-color: var(--teal-50);
+  cursor: progress;
 }
 
-.sentence-text {
-  flex-grow: 1;
-  margin-right: 1rem;
-  color: var(--color-text-primary);
+.sentence-item.generating .sentence-action {
+  color: var(--teal-500);
+}
+
+.sentence-spinner {
+  animation: spin 1s linear infinite;
 }
 
 /* Play Buttons */
@@ -393,6 +486,7 @@ body {
 /* Transport Bar - docked in flow at the foot of the sentence pane, so it can
    never occlude a sentence or the PDF toolbar. */
 .transport-bar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -402,8 +496,32 @@ body {
   z-index: var(--z-sticky);
 }
 
-.transport-status {
+.transport-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: var(--gray-200);
+}
+
+.transport-progress-fill {
+  height: 100%;
+  background-color: var(--teal-500);
+  transition: width 0.25s ease;
+}
+
+.transport-position {
   margin-left: auto;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.transport-status {
+  margin-left: 0.875rem;
   display: flex;
   align-items: center;
   gap: 0.4rem;
@@ -882,19 +1000,6 @@ body {
 }
 
 /* Animations */
-@keyframes border-glow {
-  0% {
-    border-color: var(--teal-500);
-    box-shadow: 0 8px 15px -3px rgba(20, 184, 166, 0.2),
-      0 4px 6px -2px rgba(20, 184, 166, 0.1);
-  }
-  100% {
-    border-color: var(--teal-600);
-    box-shadow: 0 8px 15px -3px rgba(20, 184, 166, 0.4),
-      0 4px 6px -2px rgba(20, 184, 166, 0.2), 0 0 25px rgba(20, 184, 166, 0.15);
-  }
-}
-
 @keyframes pulse-glow {
   0% {
     box-shadow: 0 4px 8px rgba(20, 184, 166, 0.3);
@@ -913,6 +1018,18 @@ body {
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* Honour reduced-motion for every animation and the smooth sentence scroll */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

@@ -190,6 +190,8 @@ export function useAudioManager() {
     clearPrepared();
   }, [stopLocalAudio, clearPrepared]);
 
+  const getCurrentAudio = useCallback(() => currentAudioRef.current, []);
+
   return {
     playAudio,
     prepare,
@@ -199,6 +201,6 @@ export function useAudioManager() {
     stopLocalAudio,
     stopCurrentAudio,
     cleanup,
-    getCurrentAudio: () => currentAudioRef.current,
+    getCurrentAudio,
   };
 }

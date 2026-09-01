@@ -9,8 +9,27 @@ export const TransportBar: React.FC<TransportBarProps> = ({
   onStop,
   isPlaying,
   cachedCount,
+  currentIndex,
+  totalSentences,
 }) => (
   <div className="transport-bar">
+    <div
+      className="transport-progress"
+      role="progressbar"
+      aria-label="Playback position"
+      aria-valuemin={1}
+      aria-valuemax={totalSentences}
+      aria-valuenow={currentIndex + 1}
+    >
+      <div
+        className="transport-progress-fill"
+        style={{
+          width: `${
+            totalSentences > 0 ? ((currentIndex + 1) / totalSentences) * 100 : 0
+          }%`,
+        }}
+      />
+    </div>
     <StyledButton type="control" onClick={onPrevious} title="Previous sentence">
       <svg
         width="24"
@@ -94,6 +113,10 @@ export const TransportBar: React.FC<TransportBarProps> = ({
         />
       </svg>
     </StyledButton>
+
+    <div className="transport-position">
+      {currentIndex + 1} of {totalSentences}
+    </div>
 
     <div className="transport-status" title="Sentences with audio ready to play">
       <span className={`buffer-dot ${cachedCount > 0 ? "buffered" : ""}`} />
