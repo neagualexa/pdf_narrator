@@ -1,145 +1,129 @@
 # Styles Directory
 
-This directory contains the centralized theming system for the PDF Narrator application, using a consistent Aquamarine, Teal, and Dark Green color palette.
+The styling system for PDF Narrator: a teal/emerald palette exposed as CSS custom
+properties, plus a small set of component classes.
 
 ## File Structure
 
-- **`colors.ts`** - Main color theme definition with TypeScript types
-- **`app.css`** - Main CSS file with CSS custom properties (CSS variables)
-- **`cssTheme.ts`** - Utilities for generating CSS custom properties from the theme
-- **`index.ts`** - Central export for all styling utilities
+- **`app.css`** - the entire stylesheet: custom properties, layout, components
+- **`colors.ts`** - the palette as TypeScript values
+- **`cssTheme.ts`** - helpers for referencing the palette from TS
+- **`index.ts`** - imports `app.css` and re-exports the TS helpers
 
-## Usage
+`App.tsx` does `import "./styles"`, which is what pulls `app.css` into the bundle.
 
-### 1. Using Colors in TypeScript/React Components
+> **Note:** no component currently imports `colors.ts` or `cssTheme.ts` - every component
+> styles itself with CSS classes and custom properties. They are kept for the palette's
+> single source of truth, but if you are writing new UI, reach for the CSS variables below
+> rather than inline style objects.
 
-```typescript
-import { colors, teal, emerald } from './styles/colors';
+## Using the theme
 
-// Direct color access
-const buttonColor = colors.teal[600]; // "#0891b2"
-const hoverColor = colors.teal[700];  // "#0e7490"
-
-// Using semantic colors
-const primaryColor = colors.button.primary;
-const successColor = colors.semantic.success;
-
-// Using palette shortcuts
-const lightTeal = teal[100];
-const darkEmerald = emerald[800];
-```
-
-### 2. Using CSS Variables in CSS Files
+Style components with classes and CSS custom properties:
 
 ```css
-/* Use predefined CSS custom properties */
 .my-component {
-  background-color: var(--teal-600);
+  background-color: var(--teal-50);
   color: var(--color-text-primary);
   border: 1px solid var(--teal-200);
 }
 
 .my-component:hover {
-  background-color: var(--teal-700);
+  background-color: var(--teal-100);
   box-shadow: var(--shadow-teal);
 }
-
-/* Use semantic colors */
-.success-message {
-  background-color: var(--color-success-light);
-  color: var(--color-success);
-  border: 1px solid var(--color-success);
-}
 ```
 
-### 3. Using the CSS Theme Utility
+## Custom Properties
 
-```typescript
-import { cssTheme, getCSSVariable } from './styles/cssTheme';
-
-// Get CSS variable references
-const primaryColor = cssTheme.colors.primary; // "var(--teal-600)"
-const tealVar = getCSSVariable('teal.500');   // "var(--teal-500)"
-
-// Use in styled-components or inline styles
-const StyledDiv = styled.div`
-  background: ${cssTheme.colors.primary};
-  box-shadow: ${cssTheme.shadows.teal};
-  background-image: ${cssTheme.gradients.tealEmerald};
-`;
-```
-
-## Color Palette
-
-### Teal (Primary Brand Color)
-- `teal-50` to `teal-950` - Light to dark teal shades
-- Main brand color: `teal-600` (#0891b2)
-
-### Emerald (Success/Action Color)
-- `emerald-50` to `emerald-950` - Light to dark emerald shades
-- Success color: `emerald-500` (#10b981)
-
-### Aquamarine (Accent Color)
-- `aquamarine-50` to `aquamarine-950` - Light to dark aquamarine shades
-- Special highlights: `aquamarine-500` (#14d4c4)
-
-### Gray (Neutral Colors)
-- `gray-50` to `gray-900` - Standard gray palette for text and borders
-
-## Semantic Color Names
-
-The theme includes semantic color mappings for common use cases:
-
-- **Primary Actions**: `colors.button.primary` (teal-600)
-- **Secondary Actions**: `colors.button.secondary` (emerald-600)
-- **Success States**: `colors.semantic.success` (emerald-500)
-- **Warning States**: `colors.semantic.warning` (teal-500)
-- **Error States**: `colors.semantic.error` (emerald-900)
-- **Text Colors**: `colors.semantic.text` (gray-700)
-
-## CSS Custom Properties Available
-
-The following CSS variables are automatically generated and available:
+Defined on `:root` in `app.css`.
 
 ```css
-/* Color Palettes */
---teal-50, --teal-100, ..., --teal-950
---emerald-50, --emerald-100, ..., --emerald-950
---aquamarine-50, --aquamarine-100, ..., --aquamarine-950
---gray-50, --gray-100, ..., --gray-900
+/* Palettes */
+--teal-50 ... --teal-950
+--emerald-50 ... --emerald-950
+--gray-50 ... --gray-900
 
-/* Semantic Colors */
---color-primary, --color-secondary
---color-success, --color-warning, --color-error
---color-text, --color-text-primary, --color-text-secondary
-
-/* Component Colors */
+/* Semantic */
 --color-background, --color-card-bg
+--color-text, --color-text-primary, --color-text-secondary, --color-text-muted
 --color-border, --color-border-light, --color-border-focus
+--color-button-primary, --color-button-primary-hover
+--color-button-secondary, --color-button-secondary-hover
+--color-success, --color-success-light
+--color-warning, --color-warning-light
+--color-error, --color-error-light
+
+/* Z-index scale - the single source of stacking order */
+--z-base, --z-sticky, --z-popover, --z-toast, --z-overlay
 
 /* Shadows */
---shadow-sm, --shadow-md, --shadow-lg
---shadow-teal, --shadow-emerald
+--shadow-sm, --shadow-md, --shadow-lg, --shadow-teal, --shadow-emerald
 
 /* Gradients */
---gradient-teal-emerald
---gradient-teal-light, --gradient-emerald-light
---gradient-teal-dark
+--gradient-teal-emerald, --gradient-teal-light
+--gradient-emerald-light, --gradient-teal-dark
 ```
 
-## Migration from Old App.css
+The **aquamarine** palette exists in `colors.ts` but is deliberately *not* emitted as CSS
+variables - nothing uses it.
 
-The new system is backward compatible. The old `App.css` styles are preserved but now use CSS custom properties for colors instead of hardcoded hex values. This provides:
+Always take a stacking order from the `--z-*` scale rather than inventing a number, so
+overlays cannot fight.
 
-1. **Consistency** - All colors come from the central theme
-2. **Maintainability** - Change colors in one place
-3. **Type Safety** - TypeScript support for color values
-4. **Flexibility** - Easy to create theme variants or dark mode
+## Buttons
+
+Every button in the app is `StyledButton`, which renders `.btn` plus a variant class. Hover,
+focus and disabled states are CSS - do not reimplement them per component.
+
+```
+.btn                    base: layout, focus ring, disabled state
+.btn--sm  .btn--md      sizes
+.btn--primary           solid teal
+.btn--secondary         tinted
+.btn--toolbar           labelled app-bar control; supports .is-active
+.btn--upload            empty-state call to action
+.btn--engine            segmented control; supports .is-active
+.btn--close             icon button on a coloured header
+.btn--control           transport: circular, 2rem
+.btn--control-primary   transport: the emphasised play/pause, 2.5rem
+.btn--control-stop      transport: stop
+```
+
+Add a variant by adding a class here and an entry in `StyledButton`'s `VARIANT_CLASS` map.
+
+## Layout
+
+`.app-shell` is a flex column - app bar, optional tab bar, then `.app-body`. It is flex
+rather than fixed grid rows because the tab bar only exists on narrow viewports.
+
+`.app-body` is a three-column grid: sentence pane, `.pane-divider`, document pane. The
+columns are set **inline** from React state (the draggable split), so any rule that needs to
+override the split must live behind the same breakpoint that stops React applying it.
+
+- `.pane` - a scroll container; keep `min-height: 0` or its children will not scroll
+- `.sentence-item` - `flex-shrink: 0` is load-bearing. It has `overflow: hidden` to clip its
+  progress bar to the corner radius, and that zeroes a flex item's automatic minimum size,
+  so without it every row collapses
+- `--sentence-progress` - written on `.sentence-list` each animation frame; the active row's
+  `::after` scales by it
+
+## Responsive
+
+One breakpoint at **1024px**, where the panes become tabs, and a second at **768px** that
+trims the app bar and transport readouts. Both are at the bottom of `app.css`, alongside the
+`prefers-reduced-motion` block that neutralises animation and smooth scrolling.
+
+## Accessibility
+
+- `.sr-only` - visually hidden, used by the now-playing live region
+- Focus rings come from `.btn:focus-visible` and per-component `:focus-visible` rules; keep
+  them, they are the only visible focus indicator
 
 ## Best Practices
 
-1. **Use semantic colors** when possible (`--color-primary` instead of `--teal-600`)
-2. **Use CSS variables** in CSS files for better performance
-3. **Use TypeScript colors** in React components for type safety
-4. **Document color usage** when creating new components
-5. **Test color contrast** for accessibility compliance
+1. **Prefer semantic variables** (`--color-text-primary`) over raw palette steps (`--teal-700`)
+2. **Take z-index from the scale**, never a literal
+3. **Style through classes in `app.css`**, not inline style objects
+4. **Respect `prefers-reduced-motion`** for anything animated
+5. **Check contrast** when introducing a new colour pairing

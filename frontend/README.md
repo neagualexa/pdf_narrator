@@ -1,46 +1,54 @@
-# Getting Started with Create React App
+# PDF Narrator - Frontend
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+The React frontend for [PDF Narrator](../README.md). Bootstrapped with
+[Create React App](https://github.com/facebook/create-react-app), TypeScript template.
 
-## Available Scripts
+**Start here:** the root [README](../README.md) covers setup, running both halves together,
+and what the app does. Styling conventions live in [`src/styles/README.md`](src/styles/README.md).
 
-In the project directory, you can run:
+## Scripts
 
 ### `npm start`
+Runs the dev server, preferring port 3000. Use `PORT` to choose another - `run.sh` does this
+when 3000 is taken.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+The frontend calls the backend directly at `http://localhost:3001`; override with
+`REACT_APP_API_URL`. There is no CRA proxy - the backend enables CORS.
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+```bash
+PORT=3002 REACT_APP_API_URL=http://localhost:4001 npm start
+```
+
+The backend must be running, or uploads and audio generation will fail.
 
 ### `npm test`
+Jest in watch mode; `CI=true npm test` for a single run.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+> **Known issue:** `App.test.tsx` fails to run - Jest cannot parse `react-pdf`'s ESM build
+> without extra transform configuration. The other suites pass.
 
 ### `npm run build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
-
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Production build into `build/`.
 
 ### `npm run eject`
+One-way operation, removes the CRA build dependency. Not used by this project.
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+## Layout
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
-
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+```
+src/
+  App.tsx              app shell, playback orchestration, keyboard shortcuts
+  api.ts               backend client
+  types.ts             shared types
+  voiceName.ts         voice display name -> spoken name
+  pdfHighlight.ts      matches a spoken sentence to the PDF text layer
+  components/          SentenceItem, TransportBar, VoiceControls, PdfViewer, StyledButton
+  hooks/               useAudioManager, useAudioCache, useMediaQuery
+  reducers/            appReducer, playbackReducer
+  styles/              app.css and the theme (see its README)
+```
 
 ## Learn More
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
+- [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started)
+- [React documentation](https://reactjs.org/)
