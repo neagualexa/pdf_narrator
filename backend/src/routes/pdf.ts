@@ -4,6 +4,7 @@ import pdf from "pdf-parse";
 import fs from "fs";
 import { CONFIG } from "../config";
 import { runPythonScript } from "../pythonRunner";
+import { renderPage, stripRunningHeads } from "../pdfText";
 
 const router = Router();
 const upload = multer({ dest: CONFIG.UPLOAD_DIR });
@@ -22,27 +23,13 @@ router.post(
       const dataBuffer = fs.readFileSync(req.file.path);
 
       // Capture each page's text as it renders so sentences can be attributed
-      // to a source page. This mirrors pdf-parse's own default renderer; we
-      // only intercept the per-page result on the way past.
+      // to a source page. renderPage rebuilds the text from run geometry, which
+      // is what keeps OCR'd pages (one positioned run per word, no space
+      // characters) from collapsing into "providegrounds".
       const pageTexts: string[] = [];
       const data = await pdf(dataBuffer, {
         pagerender: async (pageData: any): Promise<string> => {
-          const textContent = await pageData.getTextContent({
-            normalizeWhitespace: false,
-            disableCombineTextItems: false,
-          });
-
-          let lastY: number | undefined;
-          let text = "";
-          for (const item of textContent.items) {
-            if (lastY === item.transform[5] || !lastY) {
-              text += item.str;
-            } else {
-              text += "\n" + item.str;
-            }
-            lastY = item.transform[5];
-          }
-
+          const text = await renderPage(pageData);
           pageTexts.push(text);
           return text;
         },
@@ -50,8 +37,12 @@ router.post(
 
       fs.unlinkSync(req.file.path);
 
+      // Running heads repeat on every page and would otherwise be narrated in
+      // the middle of any sentence that spans a page break.
+      const cleanedPages = stripRunningHeads(pageTexts);
+
       // Sentinels the splitter consumes to tag each sentence with its page.
-      const markedText = pageTexts
+      const markedText = cleanedPages
         .map((text, i) => `\n\n<<<PDFPAGE:${i + 1}>>>\n\n${text}`)
         .join("");
 
