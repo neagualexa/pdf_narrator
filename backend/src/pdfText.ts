@@ -46,8 +46,13 @@ function toRun(item: TextItem): Run | null {
   // would have conveyed is recovered from the geometry below.
   if (!item.str || !item.str.trim()) return null;
 
-  const [a, , , d, x, y] = item.transform;
-  const size = Math.abs(item.height || d || a) || 10;
+  const [a, b, c, d, x, y] = item.transform;
+  // Take the size from the text matrix's vertical scale rather than
+  // `item.height`: some producers report a height that is the square of the
+  // font size (a 10pt run arrives as 101.6), which would inflate both the
+  // line tolerance and the word-space threshold enough to fold whole
+  // paragraphs into one line and swallow the spaces between words.
+  const size = Math.hypot(c, d) || Math.hypot(a, b) || Math.abs(item.height ?? 0) || 10;
 
   return {
     str: item.str,
