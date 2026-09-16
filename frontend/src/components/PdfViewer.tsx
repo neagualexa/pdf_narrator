@@ -14,6 +14,7 @@ import {
   findSentenceSegments,
   renderTextItemHtml,
   PdfTextItem,
+  SentenceSegment,
 } from "../pdfHighlight";
 
 // Use external CDN as per official instructions
@@ -47,14 +48,35 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   onSentenceActivate,
 }) => {
   const [numPages, setNumPages] = useState<number | null>(null);
+
+  /** The page filling most of the viewport - what the readout reports. */
   const [pageNumber, setPageNumber] = useState<number>(1);
+
+  /** Which pages are close enough to the viewport to be worth rendering. */
+  const [renderWindow, setRenderWindow] = useState<{
+    first: number;
+    last: number;
+  }>({ first: 1, last: 1 });
+
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [scale, setScale] = useState<number>(1.0);
   const [baseWidth, setBaseWidth] = useState<number>(600);
   const [showHelp, setShowHelp] = useState<boolean>(false);
   const [followPlayback, setFollowPlayback] = useState<boolean>(true);
-  const [textItems, setTextItems] = useState<PdfTextItem[]>([]);
+
+  /** Text items per 1-based page, for the pages that have rendered. */
+  const [textItemsByPage, setTextItemsByPage] = useState<
+    Map<number, PdfTextItem[]>
+  >(new Map());
+
+  /**
+   * Page height as a multiple of its width, from page 1. Unrendered pages are
+   * held open by a spacer of this shape so the scrollbar does not lurch as
+   * they mount. A document mixing portrait and landscape will therefore shift
+   * slightly when an odd page renders.
+   */
+  const [pageAspect, setPageAspect] = useState<number>(1.414);
 
   // Bumped once each time pdf.js finishes building the text layer. Rendering
   // is async and wipes the layer's innerHTML, so the classes marking the
@@ -70,14 +92,29 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const hoveredRef = useRef<number | null>(null);
   const armedRef = useRef(false);
 
-  const onDocumentLoadSuccess = useCallback(
-    ({ numPages }: { numPages: number }) => {
-      setNumPages(numPages);
-      setLoading(false);
-      setError(null);
-    },
-    []
-  );
+  /** Page wrappers by 1-based page number, for scrolling and observing. */
+  const pageNodes = useRef<Map<number, HTMLDivElement>>(new Map());
+  const windowObserver = useRef<IntersectionObserver | null>(null);
+  const viewObserver = useRef<IntersectionObserver | null>(null);
+  /** Visible height of each page, so the readout can pick the dominant one. */
+  const visibleHeights = useRef<Map<number, number>>(new Map());
+  /** Pages within rendering distance of the viewport. */
+  const nearPages = useRef<Set<number>>(new Set());
+  /** What the follow effect last scrolled to, so it does not fight the user. */
+  const followedRef = useRef<{ key: string; onMark: boolean } | null>(null);
+
+  const onDocumentLoadSuccess = useCallback(async (pdf: any) => {
+    setNumPages(pdf.numPages);
+    setLoading(false);
+    setError(null);
+
+    try {
+      const viewport = (await pdf.getPage(1)).getViewport({ scale: 1 });
+      if (viewport.width > 0) setPageAspect(viewport.height / viewport.width);
+    } catch {
+      // Keep the A4-ish default; spacers are only an estimate anyway.
+    }
+  }, []);
 
   // Fit-to-width, kept correct as the pane is resized. The old code measured
   // once on load and capped the page at 600px, so the view neither reflowed
@@ -100,30 +137,56 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     return () => observer.disconnect();
   }, [file]);
 
+  // A new document invalidates every page's text.
   useEffect(() => {
-    setTextItems([]);
-  }, [pageNumber, file]);
+    setTextItemsByPage(new Map());
+    setPageNumber(1);
+    setRenderWindow({ first: 1, last: 1 });
+    pageNodes.current.clear();
+    visibleHeights.current.clear();
+    nearPages.current.clear();
+    followedRef.current = null;
+  }, [file]);
 
-  // The sentences worth trying to locate on this page.
-  const candidates = useMemo(
-    () => candidatesForPage(sentences, sentencePages, pageNumber),
-    [sentences, sentencePages, pageNumber],
-  );
+  const handleTextItems = useCallback((page: number, items: PdfTextItem[]) => {
+    setTextItemsByPage((current) => {
+      // A page's text cannot change within a document, and scrolling remounts
+      // pages repeatedly. Keeping the first result means a remount does not
+      // churn the renderer - which would rebuild every mounted text layer.
+      if (current.has(page)) return current;
+      const next = new Map(current);
+      next.set(page, items);
+      return next;
+    });
+  }, []);
 
-  // Where every locatable sentence sits within each text item.
-  const segments = useMemo(
-    () => findSentenceSegments(textItems, candidates),
-    [textItems, candidates],
-  );
+  // Where every locatable sentence sits, per page then per text item. Only
+  // pages that have actually rendered are in here, so the cost tracks what is
+  // on screen rather than the length of the document.
+  const segmentsByPage = useMemo(() => {
+    const byPage = new Map<number, Map<number, SentenceSegment[]>>();
+    textItemsByPage.forEach((items, page) => {
+      const candidates = candidatesForPage(sentences, sentencePages, page);
+      byPage.set(page, findSentenceSegments(items, candidates));
+    });
+    return byPage;
+  }, [textItemsByPage, sentences, sentencePages]);
 
   // Deliberately independent of which sentence is playing or hovered:
   // react-pdf lists this callback in the effect that renders the text layer,
   // and that effect clears the layer and re-runs pdf.js from scratch. Anything
   // transient is a class toggled on the marks below instead.
   const customTextRenderer = useCallback(
-    ({ str, itemIndex }: { str: string; itemIndex: number }) =>
-      renderTextItemHtml(str, segments.get(itemIndex)),
-    [segments],
+    ({
+      str,
+      itemIndex,
+      pageNumber: page,
+    }: {
+      str: string;
+      itemIndex: number;
+      pageNumber: number;
+    }) => renderTextItemHtml(str, segmentsByPage.get(page)?.get(itemIndex)),
+    [segmentsByPage],
   );
 
   // Must be stable: react-pdf wraps this prop in a callback that its render
@@ -225,13 +288,174 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     [onSentenceActivate],
   );
 
-  // Follow playback across page boundaries, unless the user has taken over.
+  /** Scrolls the container so `node` sits just below the top edge. */
+  const scrollNodeToTop = useCallback((node: HTMLElement, offset = 8) => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const top =
+      container.scrollTop +
+      node.getBoundingClientRect().top -
+      container.getBoundingClientRect().top -
+      offset;
+
+    const prefersReducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+
+    // Animating a jump of many pages would crawl through the spacers standing
+    // in for pages that have not rendered, so only short hops are smoothed.
+    const isNearby =
+      Math.abs(top - container.scrollTop) < container.clientHeight * 2;
+
+    // Deliberately not scrollIntoView: that would also scroll the app's own
+    // ancestors, dragging the whole two-pane layout around.
+    container.scrollTo({
+      top,
+      behavior: prefersReducedMotion || !isNearby ? "auto" : "smooth",
+    });
+  }, []);
+
+  const scrollToPage = useCallback(
+    (page: number) => {
+      const node = pageNodes.current.get(page);
+      if (node) scrollNodeToTop(node);
+    },
+    [scrollNodeToTop],
+  );
+
+  // Two observers, because the two questions have different answers: which
+  // pages to render reaches well beyond the viewport, while the page readout
+  // must only count what is actually on screen.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !numPages) return;
+
+    const pageOf = (entry: IntersectionObserverEntry) =>
+      Number((entry.target as HTMLElement).dataset.pageNumber);
+
+    // The containers themselves never change identity; bind them here so the
+    // cleanup below is not reading a ref at teardown time.
+    const near_ = nearPages.current;
+    const heights = visibleHeights.current;
+
+    const near = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const page = pageOf(entry);
+          if (entry.isIntersecting) near_.add(page);
+          else near_.delete(page);
+        });
+
+        const pages = Array.from(near_);
+        if (pages.length === 0) return;
+
+        const next = { first: Math.min(...pages), last: Math.max(...pages) };
+        setRenderWindow((current) =>
+          current.first === next.first && current.last === next.last
+            ? current
+            : next,
+        );
+      },
+      // Roughly a screen of slack either way, so scrolling meets rendered
+      // pages rather than blank spacers.
+      { root: container, rootMargin: "120% 0px" },
+    );
+
+    const view = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const page = pageOf(entry);
+          if (entry.isIntersecting) {
+            heights.set(page, entry.intersectionRect.height);
+          } else {
+            heights.delete(page);
+          }
+        });
+
+        let dominant = 0;
+        let best = 0;
+        heights.forEach((height, page) => {
+          if (height > best) {
+            best = height;
+            dominant = page;
+          }
+        });
+        if (dominant > 0) setPageNumber(dominant);
+      },
+      { root: container, threshold: [0, 0.01, 0.25, 0.5, 0.75, 1] },
+    );
+
+    windowObserver.current = near;
+    viewObserver.current = view;
+    pageNodes.current.forEach((node) => {
+      near.observe(node);
+      view.observe(node);
+    });
+
+    return () => {
+      near.disconnect();
+      view.disconnect();
+      windowObserver.current = null;
+      viewObserver.current = null;
+      heights.clear();
+      near_.clear();
+    };
+  }, [numPages, file]);
+
+  /** Ref callback on each page wrapper; the returned cleanup needs React 19. */
+  const attachPage = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return;
+    const page = Number(node.dataset.pageNumber);
+    pageNodes.current.set(page, node);
+    windowObserver.current?.observe(node);
+    viewObserver.current?.observe(node);
+
+    return () => {
+      pageNodes.current.delete(page);
+      visibleHeights.current.delete(page);
+      windowObserver.current?.unobserve(node);
+      viewObserver.current?.unobserve(node);
+    };
+  }, []);
+
+  // Follow playback down the document, unless the user has taken over. Scrolls
+  // to the sentence itself once its page has rendered, and to the top of the
+  // page before that - so a page still mounting is not left off screen.
   useEffect(() => {
     if (!followPlayback) return;
     if (!activePage || !numPages) return;
     if (activePage < 1 || activePage > numPages) return;
-    setPageNumber(activePage);
-  }, [followPlayback, activePage, numPages]);
+
+    const pageNode = pageNodes.current.get(activePage);
+    if (!pageNode) return;
+
+    const mark =
+      activeSentenceIndex == null
+        ? null
+        : pageNode.querySelector<HTMLElement>(
+            `mark[data-sentence-index="${activeSentenceIndex}"]`,
+          );
+
+    // Re-scroll only when the target changed, or when the sentence's mark has
+    // since appeared - otherwise every text-layer rebuild would yank the view.
+    const key = `${activePage}:${activeSentenceIndex}`;
+    const followed = followedRef.current;
+    if (followed?.key === key && (followed.onMark || !mark)) return;
+    followedRef.current = { key, onMark: Boolean(mark) };
+
+    // A quarter-screen of lead-in, so the sentence is not flush against the
+    // top edge with all its context above the fold.
+    if (mark) scrollNodeToTop(mark, (containerRef.current?.clientHeight ?? 0) / 4);
+    else scrollNodeToTop(pageNode);
+  }, [
+    followPlayback,
+    activePage,
+    activeSentenceIndex,
+    numPages,
+    textLayerVersion,
+    scrollNodeToTop,
+  ]);
 
   const onDocumentLoadError = useCallback((error: Error) => {
     console.error("Error loading PDF:", error);
@@ -243,13 +467,13 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // than being undone by the next sentence.
   const goToPrevPage = useCallback(() => {
     setFollowPlayback(false);
-    setPageNumber((page) => Math.max(1, page - 1));
-  }, []);
+    scrollToPage(Math.max(1, pageNumber - 1));
+  }, [pageNumber, scrollToPage]);
 
   const goToNextPage = useCallback(() => {
     setFollowPlayback(false);
-    setPageNumber((page) => (numPages ? Math.min(numPages, page + 1) : page));
-  }, [numPages]);
+    scrollToPage(numPages ? Math.min(numPages, pageNumber + 1) : pageNumber);
+  }, [numPages, pageNumber, scrollToPage]);
 
   const zoomIn = useCallback(() => {
     setScale((prevScale) => Math.min(prevScale + 0.25, 3.0));
@@ -371,7 +595,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           overflow: "auto",
           display: "flex",
           flexDirection: "column",
-          alignItems: "flex-start", // Changed from "center" to allow horizontal scrolling
+          alignItems: "stretch", // The page column centres itself; stretching keeps horizontal scrolling
           padding: "10px",
           backgroundColor: "#f7fafc",
         }}
@@ -385,7 +609,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           onMouseDown={handleMouseDown}
           style={{
             display: "flex",
-            justifyContent: "center",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "12px",
             width: "100%",
             minWidth: `${baseWidth * scale}px`, // Ensure minimum width for zoomed content
           }}
@@ -395,17 +621,49 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
             onLoadSuccess={onDocumentLoadSuccess}
             onLoadError={onDocumentLoadError}
           >
-            <Page
-              pageNumber={pageNumber}
-              width={baseWidth * scale}
-              renderTextLayer={true}
-              renderAnnotationLayer={true}
-              onGetTextSuccess={(textContent) =>
-                setTextItems((textContent?.items ?? []) as PdfTextItem[])
-              }
-              customTextRenderer={customTextRenderer}
-              onRenderTextLayerSuccess={handleTextLayerRendered}
-            />
+            {/* Every page is laid out so the whole document can be scrolled,
+                but only the pages near the viewport are actually rendered -
+                the rest are spacers of the same shape, which keeps a long
+                document from costing a canvas and a text layer per page. */}
+            {Array.from({ length: numPages ?? 0 }, (_, i) => i + 1).map(
+              (page) => {
+                const width = baseWidth * scale;
+                const isRendered =
+                  page >= renderWindow.first && page <= renderWindow.last;
+
+                return (
+                  <div
+                    key={page}
+                    ref={attachPage}
+                    data-page-number={page}
+                    className="pdf-page"
+                    style={{
+                      width,
+                      minHeight: isRendered ? undefined : width * pageAspect,
+                      backgroundColor: "white",
+                      boxShadow: "0 1px 4px rgba(0,0,0,0.12)",
+                    }}
+                  >
+                    {isRendered && (
+                      <Page
+                        pageNumber={page}
+                        width={width}
+                        renderTextLayer={true}
+                        renderAnnotationLayer={true}
+                        onGetTextSuccess={(textContent) =>
+                          handleTextItems(
+                            page,
+                            (textContent?.items ?? []) as PdfTextItem[],
+                          )
+                        }
+                        customTextRenderer={customTextRenderer}
+                        onRenderTextLayerSuccess={handleTextLayerRendered}
+                      />
+                    )}
+                  </div>
+                );
+              },
+            )}
           </Document>
         </div>
       </div>

@@ -1067,6 +1067,23 @@ body.is-resizing {
   border: none;
 }
 
+/* The PDF pane renders the whole document as one scrollable column. The pages
+   are children of react-pdf's own wrapper, so the column lives on that. */
+.pdf-page-area .react-pdf__Document {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+/* Holds a page's slot open while it is still a spacer, so the scrollbar does
+   not jump as pages mount and unmount around the viewport. */
+.pdf-page-area .pdf-page {
+  position: relative;
+  flex: 0 0 auto;
+}
+
 /* Every sentence the matcher located on the page is wrapped so it can be
    hovered and Alt+clicked. The wrapper has to be a <mark>, not a <span>:
    pdf.js absolutely positions every span inside the text layer, which would
