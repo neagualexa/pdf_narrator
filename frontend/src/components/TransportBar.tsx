@@ -144,9 +144,12 @@ export const TransportBar: React.FC<TransportBarProps> = ({
       {currentIndex + 1} of {totalSentences}
     </div>
 
-    <div className="transport-status" title="Sentences with audio ready to play">
+    <div
+      className="transport-status"
+      title="Sentences with audio ready to play"
+    >
       <span className={`buffer-dot ${cachedCount > 0 ? "buffered" : ""}`} />
-      {cachedCount > 0 ? `${cachedCount} buffered` : "Nothing buffered"}
+      {`${cachedCount} buffered`}
     </div>
   </div>
 );

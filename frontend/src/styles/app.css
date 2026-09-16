@@ -1079,6 +1079,44 @@ body.is-resizing {
   box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.35);
 }
 
+/* Drag-and-drop - shown only while a file is over the window. pointer-events
+   stay off so the drag keeps reaching the shell's own drop handler. */
+.drop-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background-color: rgba(17, 24, 39, 0.45);
+  pointer-events: none;
+  z-index: var(--z-overlay);
+}
+
+.drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 2rem 2.5rem;
+  border: 2px dashed var(--teal-500);
+  border-radius: 0.75rem;
+  background-color: var(--color-card-bg);
+  color: var(--teal-700);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.drop-overlay-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
 /* Loading */
 .loading-overlay {
   position: fixed;

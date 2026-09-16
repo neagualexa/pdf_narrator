@@ -45,6 +45,12 @@ interface StoredSettings {
   autoplay?: boolean;
 }
 
+/** Some browsers hand over an empty or vendor-specific type, so fall back to
+ *  the extension rather than rejecting a real PDF. */
+function isPdf(file: File): boolean {
+  return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+}
+
 function readStoredSettings(): StoredSettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
@@ -173,11 +179,16 @@ export default function App() {
     });
   }, []);
 
-  // File upload handler
-  const handleFileUpload = useCallback(
-    async (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      if (!file) return;
+  // Loads a PDF, whichever way it arrived - the file picker or a drop.
+  const loadPdf = useCallback(
+    async (file: File) => {
+      if (!isPdf(file)) {
+        dispatchApp({
+          type: "SET_ERROR",
+          payload: `"${file.name}" is not a PDF.`,
+        });
+        return;
+      }
 
       // Clear error immediately when a new file is selected
       dispatchApp({ type: "SET_ERROR", payload: null });
@@ -208,6 +219,16 @@ export default function App() {
       }
     },
     [dispatchPlaybackSync],
+  );
+
+  const handleFileUpload = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      // Clearing the input lets the same file be picked again after a reset.
+      event.target.value = "";
+      if (file) loadPdf(file);
+    },
+    [loadPdf],
   );
 
   // Kick off generation + buffering of the next sentences while the current one
@@ -825,6 +846,9 @@ export default function App() {
   });
   const [isResizing, setIsResizing] = useState(false);
 
+  /** True while a file is being dragged over the window. */
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+
   const applySplitFromClientX = useCallback((clientX: number) => {
     const body = appBodyRef.current;
     if (!body) return;
@@ -894,6 +918,54 @@ export default function App() {
     document.getElementById("file-upload")?.click();
   }, []);
 
+  // Drag events fire for every element entered, so nested enters/leaves are
+  // counted rather than treated as leaving the window.
+  const dragDepth = useRef(0);
+
+  const isFileDrag = (event: React.DragEvent) =>
+    Array.from(event.dataTransfer.types).includes("Files");
+
+  const handleDragEnter = useCallback((event: React.DragEvent) => {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    setIsDraggingFile(true);
+  }, []);
+
+  const handleDragOver = useCallback((event: React.DragEvent) => {
+    if (!isFileDrag(event)) return;
+    // Without this the browser navigates to the dropped file instead.
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }, []);
+
+  const handleDragLeave = useCallback((event: React.DragEvent) => {
+    if (!isFileDrag(event)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setIsDraggingFile(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault();
+      dragDepth.current = 0;
+      setIsDraggingFile(false);
+
+      const files = Array.from(event.dataTransfer.files);
+      const pdf = files.find(isPdf);
+      if (pdf) {
+        loadPdf(pdf);
+      } else if (files.length > 0) {
+        dispatchApp({
+          type: "SET_ERROR",
+          payload: "Only PDF files can be loaded.",
+        });
+      }
+    },
+    [loadPdf],
+  );
+
   const fileInput = (
     <input
       id="file-upload"
@@ -907,7 +979,37 @@ export default function App() {
   );
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDraggingFile && (
+        <div className="drop-overlay">
+          <div className="drop-overlay-card">
+            <svg
+              width="32"
+              height="32"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 16V4m0 0L8 8m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"
+              />
+            </svg>
+            <p className="drop-overlay-title">
+              {hasDocument ? "Drop to replace the PDF" : "Drop your PDF here"}
+            </p>
+          </div>
+        </div>
+      )}
       {isLoading && <LoadingSpinner />}
       {error && <ErrorMessage message={error} onDismiss={handleDismissError} />}
       {fileInput}
@@ -1058,7 +1160,8 @@ export default function App() {
                   Select PDF to Upload
                 </StyledButton>
                 <p className="upload-text">
-                  The conversion will start automatically.
+                  …or drop a PDF anywhere on this window. The conversion will
+                  start automatically.
                 </p>
               </div>
               <footer className="footer">
