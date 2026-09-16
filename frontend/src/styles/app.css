@@ -682,6 +682,69 @@ body.is-resizing {
   transition: width 0.25s ease;
 }
 
+/* Autoplay switch - makes the continuous-reading behaviour of the play button
+   explicit instead of implied. */
+.autoplay-toggle {
+  margin-left: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background-color: transparent;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.autoplay-toggle:hover {
+  border-color: var(--teal-500);
+  color: var(--teal-800);
+}
+
+.autoplay-toggle.is-on {
+  border-color: var(--teal-500);
+  background-color: var(--teal-50);
+  color: var(--teal-800);
+}
+
+.autoplay-track {
+  position: relative;
+  width: 1.75rem;
+  height: 0.875rem;
+  border-radius: 999px;
+  background-color: var(--gray-300);
+  flex-shrink: 0;
+  transition: background-color 0.15s ease;
+}
+
+.autoplay-toggle.is-on .autoplay-track {
+  background-color: var(--teal-600);
+}
+
+.autoplay-knob {
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background-color: white;
+  transition: transform 0.15s ease;
+}
+
+.autoplay-toggle.is-on .autoplay-knob {
+  transform: translateX(0.875rem);
+}
+
 .transport-position {
   margin-left: auto;
   font-size: 0.75rem;

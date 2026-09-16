@@ -42,6 +42,7 @@ interface StoredSettings {
   engine?: "pyttsx3" | "piper";
   voiceId?: string | null;
   speed?: number;
+  autoplay?: boolean;
 }
 
 function readStoredSettings(): StoredSettings {
@@ -59,9 +60,15 @@ export default function App() {
     initialAppState,
     (base) => {
       const stored = readStoredSettings();
-      return typeof stored.speed === "number"
-        ? { ...base, speechSpeed: stored.speed }
-        : base;
+      return {
+        ...base,
+        ...(typeof stored.speed === "number"
+          ? { speechSpeed: stored.speed }
+          : {}),
+        ...(typeof stored.autoplay === "boolean"
+          ? { autoplayEnabled: stored.autoplay }
+          : {}),
+      };
     },
   );
   const [playbackState, dispatchPlayback] = useReducer(
@@ -107,6 +114,7 @@ export default function App() {
     speechSpeed,
     audioCache,
     isContinuousPlayback,
+    autoplayEnabled,
     selectedVoiceId,
     availableVoices,
     voicesLoading,
@@ -127,6 +135,10 @@ export default function App() {
 
   const isContinuousRef = useRef(isContinuousPlayback);
   isContinuousRef.current = isContinuousPlayback;
+
+  // Read inside callbacks that must not be re-created when the toggle flips.
+  const autoplayRef = useRef(autoplayEnabled);
+  autoplayRef.current = autoplayEnabled;
 
   // Lets the "ended" handler call the latest handlePlay without a dependency cycle.
   const handlePlayRef = useRef<
@@ -288,7 +300,7 @@ export default function App() {
               isContinuousRef.current &&
               index + 1 >= sentences.length
             ) {
-              // Reached the end, disable continuous playback
+              // Reached the end: end this run, but keep the autoplay setting.
               dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
             }
           },
@@ -380,13 +392,18 @@ export default function App() {
       stopCurrentAudio();
       dispatchPlaybackSync({ type: "STOP" });
     } else if (sentences.length > 0) {
-      // Start continuous playback from current position
-      dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: true });
+      // Autoplay is what decides whether this run continues past the current
+      // sentence, so the button no longer silently implies it.
+      dispatchApp({
+        type: "SET_CONTINUOUS_PLAYBACK",
+        payload: autoplayEnabled,
+      });
       handlePlay(playbackState.currentIndex);
     }
   }, [
     playbackState,
     sentences,
+    autoplayEnabled,
     handlePlay,
     stopCurrentAudio,
     dispatchPlaybackSync,
@@ -395,20 +412,37 @@ export default function App() {
   const handleNext = useCallback(() => {
     const nextIndex = playbackState.currentIndex + 1;
     if (nextIndex < sentences.length) {
-      // Disable continuous playback when manually navigating (but don't clear cache)
-      dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
+      // Skipping keeps the autoplay preference; it only moves the cursor.
+      dispatchApp({
+        type: "SET_CONTINUOUS_PLAYBACK",
+        payload: autoplayEnabled,
+      });
       handlePlay(nextIndex);
     }
-  }, [playbackState, sentences, handlePlay]);
+  }, [playbackState, sentences, autoplayEnabled, handlePlay]);
 
   const handlePrevious = useCallback(() => {
     const prevIndex = playbackState.currentIndex - 1;
     if (prevIndex >= 0) {
-      // Disable continuous playback when manually navigating (but don't clear cache)
-      dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: false });
+      // Skipping keeps the autoplay preference; it only moves the cursor.
+      dispatchApp({
+        type: "SET_CONTINUOUS_PLAYBACK",
+        payload: autoplayEnabled,
+      });
       handlePlay(prevIndex);
     }
-  }, [playbackState, handlePlay]);
+  }, [playbackState, autoplayEnabled, handlePlay]);
+
+  // Flipping the toggle takes effect on the sentence already playing: turning
+  // it on continues into the next one, turning it off stops at the end of this
+  // one, so the button's state always matches what will happen.
+  const handleToggleAutoplay = useCallback(() => {
+    const next = !autoplayRef.current;
+    dispatchApp({ type: "SET_AUTOPLAY_ENABLED", payload: next });
+    if (playbackRef.current.status === "playing") {
+      dispatchApp({ type: "SET_CONTINUOUS_PLAYBACK", payload: next });
+    }
+  }, []);
 
   const handleSpeedChange = useCallback((speed: number) => {
     dispatchApp({ type: "SET_SPEECH_SPEED", payload: speed });
@@ -719,12 +753,19 @@ export default function App() {
           engine: currentTtsEngine,
           voiceId: selectedVoiceId,
           speed: speechSpeed,
+          autoplay: autoplayEnabled,
         }),
       );
     } catch {
       // Storage can be unavailable (private mode); settings just won't persist.
     }
-  }, [currentTtsEngine, selectedVoiceId, speechSpeed, voicesLoading]);
+  }, [
+    currentTtsEngine,
+    selectedVoiceId,
+    speechSpeed,
+    autoplayEnabled,
+    voicesLoading,
+  ]);
 
   // Drive the active sentence's progress bar by writing a CSS custom property
   // on the list container. Going through the DOM rather than React state keeps
@@ -978,10 +1019,11 @@ export default function App() {
                     sentence={sentence}
                     index={index}
                     onPlay={() => {
-                      // Disable continuous playback when manually selecting a sentence
+                      // Picking a sentence starts there; autoplay decides
+                      // whether it then reads on.
                       dispatchApp({
                         type: "SET_CONTINUOUS_PLAYBACK",
-                        payload: false,
+                        payload: autoplayEnabled,
                       });
                       handlePlay(index);
                     }}
@@ -1001,7 +1043,9 @@ export default function App() {
                 onNext={handleNext}
                 onPrevious={handlePrevious}
                 onStop={handleStop}
+                onToggleAutoplay={handleToggleAutoplay}
                 isPlaying={playbackState.status === "playing"}
+                autoplayEnabled={autoplayEnabled}
                 cachedCount={audioCache.size}
                 currentIndex={playbackState.currentIndex}
                 totalSentences={sentences.length}

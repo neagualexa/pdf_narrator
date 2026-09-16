@@ -16,7 +16,10 @@ export interface AppState {
   generatingAudioIndex: number | null;
   speechSpeed: number;
   audioCache: Map<number, AudioCacheEntry>;
+  /** True while a continuous run is in progress (set from `autoplayEnabled`). */
   isContinuousPlayback: boolean;
+  /** User preference: keep reading on to the next sentence when one ends. */
+  autoplayEnabled: boolean;
   selectedVoiceId: string | null;
   availableVoices: Voice[];
   voicesLoading: boolean;
@@ -48,6 +51,7 @@ export type AppAction =
   | { type: "REMOVE_FROM_CACHE"; payload: number }
   | { type: "CLEAR_CACHE" }
   | { type: "SET_CONTINUOUS_PLAYBACK"; payload: boolean }
+  | { type: "SET_AUTOPLAY_ENABLED"; payload: boolean }
   | { type: "SET_SELECTED_VOICE"; payload: string | null }
   | { type: "SET_AVAILABLE_VOICES"; payload: Voice[] }
   | { type: "SET_VOICES_LOADING"; payload: boolean }
@@ -70,7 +74,10 @@ export interface TransportBarProps {
   onNext: () => void;
   onPrevious: () => void;
   onStop: () => void;
+  onToggleAutoplay: () => void;
   isPlaying: boolean;
+  /** When on, playback continues into the following sentence by itself. */
+  autoplayEnabled: boolean;
   /** Sentences with audio already generated - drives the buffering indicator. */
   cachedCount: number;
   /** Zero-based playback cursor, shown as a 1-based position. */

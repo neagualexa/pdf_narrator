@@ -7,7 +7,9 @@ export const TransportBar: React.FC<TransportBarProps> = ({
   onNext,
   onPrevious,
   onStop,
+  onToggleAutoplay,
   isPlaying,
+  autoplayEnabled,
   cachedCount,
   currentIndex,
   totalSentences,
@@ -49,7 +51,13 @@ export const TransportBar: React.FC<TransportBarProps> = ({
     <StyledButton
       type="control-play-pause"
       onClick={onPlayPause}
-      title={isPlaying ? "Pause audio" : "Play audio"}
+      title={
+        isPlaying
+          ? "Pause audio"
+          : autoplayEnabled
+            ? "Play continuously from here"
+            : "Play this sentence only"
+      }
     >
       {isPlaying ? (
         <svg
@@ -113,6 +121,24 @@ export const TransportBar: React.FC<TransportBarProps> = ({
         />
       </svg>
     </StyledButton>
+
+    <button
+      type="button"
+      className={`autoplay-toggle ${autoplayEnabled ? "is-on" : ""}`}
+      onClick={onToggleAutoplay}
+      role="switch"
+      aria-checked={autoplayEnabled}
+      title={
+        autoplayEnabled
+          ? "Autoplay on: playback continues through the following sentences"
+          : "Autoplay off: playback stops at the end of each sentence"
+      }
+    >
+      <span className="autoplay-track" aria-hidden="true">
+        <span className="autoplay-knob" />
+      </span>
+      Autoplay
+    </button>
 
     <div className="transport-position">
       {currentIndex + 1} of {totalSentences}
