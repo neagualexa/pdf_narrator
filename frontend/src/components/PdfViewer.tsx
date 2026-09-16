@@ -10,28 +10,41 @@ import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 import StyledButton from "./StyledButton";
 import {
-  findHighlightRanges,
-  escapeHtml,
+  candidatesForPage,
+  findSentenceSegments,
+  renderTextItemHtml,
   PdfTextItem,
 } from "../pdfHighlight";
 
 // Use external CDN as per official instructions
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
+/** Class marking every sentence wrapper; the hover and playing states are added to it. */
+const SENTENCE_SELECTOR = "mark[data-sentence-index]";
+
 interface PdfViewerProps {
   file: string | File | null;
   className?: string;
   /** 1-based page the currently playing sentence came from, if known. */
   activePage?: number | null;
-  /** Text of the current sentence, highlighted in the page's text layer. */
-  activeSentence?: string | null;
+  /** Index of the current sentence, highlighted in the page's text layer. */
+  activeSentenceIndex?: number | null;
+  /** Every sentence in the document, so the ones on this page can be located. */
+  sentences?: string[];
+  /** 1-based source page per sentence, parallel to `sentences`. */
+  sentencePages?: number[];
+  /** Alt+click on a sentence in the page asks for playback to start there. */
+  onSentenceActivate?: (index: number) => void;
 }
 
 export const PdfViewer: React.FC<PdfViewerProps> = ({
   file,
   className,
   activePage,
-  activeSentence,
+  activeSentenceIndex,
+  sentences = [],
+  sentencePages = [],
+  onSentenceActivate,
 }) => {
   const [numPages, setNumPages] = useState<number | null>(null);
   const [pageNumber, setPageNumber] = useState<number>(1);
@@ -42,8 +55,20 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const [showHelp, setShowHelp] = useState<boolean>(false);
   const [followPlayback, setFollowPlayback] = useState<boolean>(true);
   const [textItems, setTextItems] = useState<PdfTextItem[]>([]);
+
+  // Bumped once each time pdf.js finishes building the text layer. Rendering
+  // is async and wipes the layer's innerHTML, so the classes marking the
+  // playing and hovered sentences have to be re-applied against this.
+  const [textLayerVersion, setTextLayerVersion] = useState(0);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  // Scopes every sentence lookup to this page. The sentence list uses the same
+  // data-sentence-index attribute, so an unscoped query would hit its rows too.
+  const pageAreaRef = useRef<HTMLDivElement>(null);
+  const hoveredRef = useRef<number | null>(null);
+  const armedRef = useRef(false);
 
   const onDocumentLoadSuccess = useCallback(
     ({ numPages }: { numPages: number }) => {
@@ -79,29 +104,125 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     setTextItems([]);
   }, [pageNumber, file]);
 
-  // Character ranges of the active sentence within each text item.
-  const highlightRanges = useMemo(
-    () => findHighlightRanges(textItems, activeSentence),
-    [textItems, activeSentence],
+  // The sentences worth trying to locate on this page.
+  const candidates = useMemo(
+    () => candidatesForPage(sentences, sentencePages, pageNumber),
+    [sentences, sentencePages, pageNumber],
   );
 
-  // react-pdf assigns this return value with innerHTML, so everything that is
-  // not our own markup has to be escaped.
-  const customTextRenderer = useCallback(
-    ({ str, itemIndex }: { str: string; itemIndex: number }) => {
-      const range = highlightRanges.get(itemIndex);
-      if (!range) return escapeHtml(str);
+  // Where every locatable sentence sits within each text item.
+  const segments = useMemo(
+    () => findSentenceSegments(textItems, candidates),
+    [textItems, candidates],
+  );
 
-      const [from, to] = range;
-      return (
-        escapeHtml(str.slice(0, from)) +
-        '<mark class="pdf-highlight">' +
-        escapeHtml(str.slice(from, to)) +
-        "</mark>" +
-        escapeHtml(str.slice(to))
-      );
+  // Deliberately independent of which sentence is playing or hovered:
+  // react-pdf lists this callback in the effect that renders the text layer,
+  // and that effect clears the layer and re-runs pdf.js from scratch. Anything
+  // transient is a class toggled on the marks below instead.
+  const customTextRenderer = useCallback(
+    ({ str, itemIndex }: { str: string; itemIndex: number }) =>
+      renderTextItemHtml(str, segments.get(itemIndex)),
+    [segments],
+  );
+
+  // Must be stable: react-pdf wraps this prop in a callback that its render
+  // effect depends on, so a fresh arrow would rebuild the layer every render.
+  const handleTextLayerRendered = useCallback(() => {
+    setTextLayerVersion((version) => version + 1);
+  }, []);
+
+  /** Moves the hover class, which is plain DOM work - no re-render, no relayout. */
+  const setHoveredSentence = useCallback((index: number | null) => {
+    const root = pageAreaRef.current;
+    if (!root || hoveredRef.current === index) return;
+
+    const paint = (target: number | null, on: boolean) => {
+      if (target === null) return;
+      root
+        .querySelectorAll(`mark[data-sentence-index="${target}"]`)
+        .forEach((node) => node.classList.toggle("pdf-sentence-hover", on));
+    };
+
+    paint(hoveredRef.current, false);
+    paint(index, true);
+    hoveredRef.current = index;
+  }, []);
+
+  /** The sentence index under a pointer event, or null if it missed the text. */
+  const sentenceIndexAt = (event: React.MouseEvent): number | null => {
+    const target = event.target as HTMLElement | null;
+    // The target can be a text node, and the endOfContent div, the item spans
+    // and the layer itself all miss the selector - all no-ops.
+    const mark = target?.closest?.(SENTENCE_SELECTOR);
+    if (!mark) return null;
+    const index = Number(mark.getAttribute("data-sentence-index"));
+    return Number.isInteger(index) ? index : null;
+  };
+
+  // Mark the playing sentence. Re-runs after every text layer build, because
+  // that build starts by clearing the classes this added.
+  useEffect(() => {
+    const root = pageAreaRef.current;
+    if (!root) return;
+
+    hoveredRef.current = null;
+    if (activeSentenceIndex == null) return;
+
+    const nodes = root.querySelectorAll(
+      `mark[data-sentence-index="${activeSentenceIndex}"]`,
+    );
+    nodes.forEach((node) => node.classList.add("pdf-highlight"));
+
+    return () =>
+      nodes.forEach((node) => node.classList.remove("pdf-highlight"));
+  }, [activeSentenceIndex, textLayerVersion, pageNumber]);
+
+  /** Shows the armed affordance, reading Alt off the pointer event. Watching
+   *  for the key itself would mean a window keydown listener, which on Windows
+   *  fights Alt's menu-bar activation. */
+  const setArmed = useCallback((armed: boolean) => {
+    if (armedRef.current === armed) return;
+    armedRef.current = armed;
+    pageAreaRef.current?.classList.toggle("pdf-armed", armed);
+  }, []);
+
+  // Movement rather than pointerover: that only fires on crossing an element
+  // boundary, so pressing Alt while already resting on a word would never arm
+  // anything. Both calls below compare against a ref first, so an ordinary
+  // move costs two boolean checks.
+  const handlePointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      // Mid drag-select pdf.js stretches .endOfContent over the whole layer,
+      // and a tint that followed the drag would only flicker.
+      if (event.buttons !== 0) return;
+
+      setArmed(event.altKey);
+      setHoveredSentence(sentenceIndexAt(event));
     },
-    [highlightRanges],
+    [setArmed, setHoveredSentence],
+  );
+
+  const handlePointerLeave = useCallback(() => {
+    setArmed(false);
+    setHoveredSentence(null);
+  }, [setArmed, setHoveredSentence]);
+
+  // Alt+click starts playback at the sentence under the pointer. Alt keeps the
+  // gesture clear of text selection, and is the one modifier that means
+  // nothing to either macOS or Windows here. Acting on mousedown rather than
+  // click means a drag that starts on the sentence still counts.
+  const handleMouseDown = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || !event.altKey) return;
+
+      const index = sentenceIndexAt(event);
+      if (index === null) return;
+
+      event.preventDefault();
+      onSentenceActivate?.(index);
+    },
+    [onSentenceActivate],
   );
 
   // Follow playback across page boundaries, unless the user has taken over.
@@ -257,6 +378,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         tabIndex={0} // Make div focusable for keyboard events
       >
         <div
+          ref={pageAreaRef}
+          className="pdf-page-area"
+          onPointerMove={handlePointerMove}
+          onPointerLeave={handlePointerLeave}
+          onMouseDown={handleMouseDown}
           style={{
             display: "flex",
             justifyContent: "center",
@@ -278,6 +404,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                 setTextItems((textContent?.items ?? []) as PdfTextItem[])
               }
               customTextRenderer={customTextRenderer}
+              onRenderTextLayerSuccess={handleTextLayerRendered}
             />
           </Document>
         </div>
@@ -453,7 +580,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                 onMouseEnter={() => setShowHelp(true)}
                 onMouseLeave={() => setShowHelp(false)}
               >
-                Ctrl+Scroll: zoom • Follow: page turns with narration
+                Ctrl+Scroll: zoom • Alt+Click text: play from that sentence •
+                Follow: page turns with narration
                 <div
                   style={{
                     position: "absolute",

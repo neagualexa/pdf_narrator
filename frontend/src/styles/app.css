@@ -1067,6 +1067,38 @@ body.is-resizing {
   border: none;
 }
 
+/* Every sentence the matcher located on the page is wrapped so it can be
+   hovered and Alt+clicked. The wrapper has to be a <mark>, not a <span>:
+   pdf.js absolutely positions every span inside the text layer, which would
+   tear a nested one out of its line. Invisible until hovered, and transparent
+   for the same reason the highlight below is. */
+.react-pdf__Page__textContent mark.pdf-sentence {
+  background-color: transparent;
+  color: transparent;
+  border-radius: 2px;
+  padding: 0;
+}
+
+/* Hover: deliberately fainter than the playing highlight - it only says "this
+   is one sentence, and it is clickable". The sentence being narrated is
+   excluded rather than left to source order, because the armed rule below is
+   more specific than the highlight and would otherwise override it. */
+.react-pdf__Page__textContent
+  mark.pdf-sentence.pdf-sentence-hover:not(.pdf-highlight) {
+  background-color: rgba(16, 185, 129, 0.12);
+}
+
+/* Holding Alt arms the click, so the affordance appears only then. */
+.pdf-page-area.pdf-armed .react-pdf__Page__textContent mark.pdf-sentence {
+  cursor: pointer;
+}
+
+.pdf-page-area.pdf-armed
+  .react-pdf__Page__textContent
+  mark.pdf-sentence.pdf-sentence-hover:not(.pdf-highlight) {
+  background-color: rgba(16, 185, 129, 0.22);
+}
+
 /* Active-sentence highlight in the PDF text layer.
    pdf.js paints the real glyphs on the canvas underneath and overlays
    transparent selectable text, so <mark> must stay transparent too - its

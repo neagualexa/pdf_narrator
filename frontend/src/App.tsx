@@ -454,6 +454,28 @@ export default function App() {
     }
   }, [playbackState, autoplayEnabled, handlePlay]);
 
+  // The one way playback is started from a sentence the user picked, shared by
+  // the sentence list and an Alt+click in the PDF so the two cannot drift.
+  // Autoplay comes from the ref, so toggling it does not re-create this.
+  const playSentence = useCallback(
+    (index: number) => {
+      if (index < 0 || index >= sentences.length) return;
+
+      // Bring the row into view now rather than waiting for the auto-scroll
+      // below, which only fires once the audio has been generated: a sentence
+      // picked in the PDF can take seconds to start, and until then the list
+      // would still be showing wherever the user last was.
+      scrollToSentence(index);
+
+      dispatchApp({
+        type: "SET_CONTINUOUS_PLAYBACK",
+        payload: autoplayRef.current,
+      });
+      handlePlay(index);
+    },
+    [sentences.length, handlePlay, scrollToSentence],
+  );
+
   // Flipping the toggle takes effect on the sentence already playing: turning
   // it on continues into the next one, turning it off stops at the end of this
   // one, so the button's state always matches what will happen.
@@ -1120,15 +1142,7 @@ export default function App() {
                     key={index}
                     sentence={sentence}
                     index={index}
-                    onPlay={() => {
-                      // Picking a sentence starts there; autoplay decides
-                      // whether it then reads on.
-                      dispatchApp({
-                        type: "SET_CONTINUOUS_PLAYBACK",
-                        payload: autoplayEnabled,
-                      });
-                      handlePlay(index);
-                    }}
+                    onPlay={() => playSentence(index)}
                     onStop={handlePause}
                     isPlaying={
                       playbackState.status === "playing" &&
@@ -1197,7 +1211,10 @@ export default function App() {
               file={pdfFile}
               className="pdf-preview-iframe"
               activePage={sentencePages[playbackState.currentIndex] ?? null}
-              activeSentence={sentences[playbackState.currentIndex] ?? null}
+              activeSentenceIndex={playbackState.currentIndex}
+              sentences={sentences}
+              sentencePages={sentencePages}
+              onSentenceActivate={playSentence}
             />
           </div>
         </section>

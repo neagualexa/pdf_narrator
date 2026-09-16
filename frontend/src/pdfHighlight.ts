@@ -165,37 +165,208 @@ export function findNormalizedRange(
   return end > start ? { start, end } : null;
 }
 
+export interface SentenceCandidate {
+  /** Index into the app's `sentences` array - what playback is started with. */
+  index: number;
+  text: string;
+}
+
+/** One contiguous run inside a single text item, owned by one sentence. */
+export interface SentenceSegment {
+  /** Offset within the item's `str`, inclusive. */
+  from: number;
+  /** Offset within the item's `str`, exclusive. */
+  to: number;
+  sentenceIndex: number;
+}
+
 /**
- * Per-item character ranges to wrap, keyed by item index.
+ * How many sentences of the previous page to also try. A sentence is tagged
+ * with the page it *starts* on, so one can spill across the page break; this
+ * is cheap insurance against an off-by-one in that tagging. It rarely matches
+ * on the continuation page, since anchoring needs the sentence's opening.
+ */
+const PAGE_LOOKBEHIND = 2;
+
+/** Ceiling for the no-page-data fallback below, so a huge document cannot stall a page turn. */
+const MAX_CANDIDATES = 1500;
+
+let warnedMissingPages = false;
+
+/**
+ * The sentences worth trying to locate on a 1-based page.
  *
- * Each item gets a single range spanning its first to last matched character,
- * so punctuation and spaces *inside* the sentence are highlighted too even
- * though they were dropped during normalisation.
+ * Without usable page data every sentence is a candidate: the matcher fails
+ * closed, so the result is still correct, just slower. Skipping the fallback
+ * would instead lose the active-sentence highlight on those documents.
+ */
+export function candidatesForPage(
+  sentences: string[],
+  sentencePages: number[],
+  page: number,
+): SentenceCandidate[] {
+  const toCandidate = (index: number): SentenceCandidate => ({
+    index,
+    text: sentences[index],
+  });
+
+  if (sentencePages.length !== sentences.length) {
+    if (!warnedMissingPages && sentences.length > MAX_CANDIDATES) {
+      warnedMissingPages = true;
+      console.warn(
+        `No per-sentence page data; matching only the first ${MAX_CANDIDATES} sentences per page.`,
+      );
+    }
+    return sentences
+      .slice(0, MAX_CANDIDATES)
+      .map((_, index) => toCandidate(index));
+  }
+
+  const previous: number[] = [];
+  const current: number[] = [];
+
+  for (let i = 0; i < sentences.length; i += 1) {
+    if (sentencePages[i] === page) current.push(i);
+    else if (sentencePages[i] === page - 1) previous.push(i);
+  }
+
+  return [...previous.slice(-PAGE_LOOKBEHIND), ...current].map(toCandidate);
+}
+
+/**
+ * Every locatable sentence on the page, as per-item character runs.
+ *
+ * Runs within an item are sorted by `from` and never overlap, which is what
+ * lets `renderTextItemHtml` emit its markup in a single pass.
+ */
+export function findSentenceSegments(
+  items: PdfTextItem[],
+  candidates: SentenceCandidate[],
+): Map<number, SentenceSegment[]> {
+  const segments = new Map<number, SentenceSegment[]>();
+  if (items.length === 0 || candidates.length === 0) return segments;
+
+  const page = normalizePage(items);
+  if (page.norm.length === 0) return segments;
+
+  const placed: { start: number; end: number; sentenceIndex: number }[] = [];
+  for (const candidate of candidates) {
+    if (!candidate.text) continue;
+    const range = findNormalizedRange(page, candidate.text);
+    if (range) {
+      placed.push({ ...range, sentenceIndex: candidate.index });
+    }
+  }
+
+  if (placed.length === 0) return segments;
+
+  // Two sentences can claim the same characters, because a match's end is far
+  // less trustworthy than its start: anchoring is on the head, while the tail
+  // is hunted in a window reaching well past the nominal length (and, for a
+  // trusted head with no tail found, simply extended). Overshoot therefore
+  // happens at the tail, so painting in start order lets a later sentence trim
+  // its predecessor's overlong tail and never the other way round.
+  placed.sort((a, b) => a.start - b.start || a.sentenceIndex - b.sentenceIndex);
+
+  const owner = new Int32Array(page.norm.length).fill(-1);
+  for (const { start, end, sentenceIndex } of placed) {
+    for (let i = start; i < end && i < owner.length; i += 1) {
+      owner[i] = sentenceIndex;
+    }
+  }
+
+  // Close a run whenever the owning sentence or the item changes. `itemOf` is
+  // non-decreasing, so each item's runs are appended in increasing offset
+  // order. Offsets are the item's own, so a run covers the punctuation and
+  // spaces inside it that normalisation dropped.
+  let runStart = -1;
+  for (let i = 0; i <= owner.length; i += 1) {
+    const continues =
+      i < owner.length &&
+      runStart !== -1 &&
+      owner[i] === owner[runStart] &&
+      page.itemOf[i] === page.itemOf[runStart];
+
+    if (continues) continue;
+
+    if (runStart !== -1 && owner[runStart] !== -1) {
+      const itemIndex = page.itemOf[runStart];
+      const list = segments.get(itemIndex);
+      const segment: SentenceSegment = {
+        from: page.offsetOf[runStart],
+        to: page.offsetOf[i - 1] + 1,
+        sentenceIndex: owner[runStart],
+      };
+      if (list) list.push(segment);
+      else segments.set(itemIndex, [segment]);
+    }
+
+    runStart = i < owner.length ? i : -1;
+  }
+
+  return segments;
+}
+
+/**
+ * Per-item character ranges to wrap for a single sentence, keyed by item index.
+ *
+ * Each item gets one range spanning its first to last matched character, so
+ * punctuation and spaces *inside* the sentence are covered too even though
+ * they were dropped during normalisation.
  */
 export function findHighlightRanges(
   items: PdfTextItem[],
   sentence: string | null | undefined,
 ): Map<number, [number, number]> {
   const ranges = new Map<number, [number, number]>();
-  if (!sentence || items.length === 0) return ranges;
+  if (!sentence) return ranges;
 
-  const page = normalizePage(items);
-  const range = findNormalizedRange(page, sentence);
-  if (!range) return ranges;
-
-  for (let i = range.start; i < range.end; i += 1) {
-    const itemIndex = page.itemOf[i];
-    const offset = page.offsetOf[i];
-    const existing = ranges.get(itemIndex);
-
-    if (existing) {
-      existing[1] = offset + 1;
-    } else {
-      ranges.set(itemIndex, [offset, offset + 1]);
-    }
-  }
+  // A lone candidate cannot overlap anything, so its segments are exactly the
+  // characters it matched, per item.
+  const segments = findSentenceSegments(items, [{ index: 0, text: sentence }]);
+  segments.forEach((list, itemIndex) => {
+    ranges.set(itemIndex, [list[0].from, list[list.length - 1].to]);
+  });
 
   return ranges;
+}
+
+/**
+ * The markup for one text item: escaped text interleaved with one <mark> per
+ * segment, each tagged with the sentence it belongs to.
+ *
+ * <mark> and not <span>: pdf.js absolutely positions every span inside the
+ * text layer, which would tear a nested one out of its line. Whether a mark is
+ * the playing sentence, or hovered, is decided by classes applied to the live
+ * DOM instead - re-rendering this string would make react-pdf rebuild the
+ * whole text layer.
+ */
+export function renderTextItemHtml(
+  str: string,
+  segments: SentenceSegment[] | undefined,
+): string {
+  if (!segments || segments.length === 0) return escapeHtml(str);
+
+  let html = "";
+  let cursor = 0;
+
+  for (const segment of segments) {
+    // `str` can be a frame ahead of the items the segments were built from, so
+    // clamp rather than emit a truncated tag.
+    const from = Math.max(cursor, Math.min(segment.from, str.length));
+    const to = Math.max(from, Math.min(segment.to, str.length));
+    if (to === from) continue;
+
+    html += escapeHtml(str.slice(cursor, from));
+    html += `<mark class="pdf-sentence" data-sentence-index="${Number(
+      segment.sentenceIndex,
+    )}">`;
+    html += escapeHtml(str.slice(from, to));
+    html += "</mark>";
+    cursor = to;
+  }
+
+  return html + escapeHtml(str.slice(cursor));
 }
 
 const HTML_ESCAPES: Record<string, string> = {
