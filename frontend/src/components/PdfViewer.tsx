@@ -78,6 +78,17 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
    */
   const [pageAspect, setPageAspect] = useState<number>(1.414);
 
+  /**
+   * Exact height-to-width ratio per 1-based page, read from every page's
+   * viewport once the document loads. Each page wrapper is held at this height
+   * whether or not it is rendered, so mounting and unmounting pages never
+   * shifts the layout - a shift mid-scroll changes which pages are near the
+   * viewport, which mounts others, and the view jitters until it settles.
+   */
+  const [pageAspects, setPageAspects] = useState<Map<number, number>>(
+    new Map(),
+  );
+
   // Bumped once each time pdf.js finishes building the text layer. Rendering
   // is async and wipes the layer's innerHTML, so the classes marking the
   // playing and hovered sentences have to be re-applied against this.
@@ -103,7 +114,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   /** What the follow effect last scrolled to, so it does not fight the user. */
   const followedRef = useRef<{ key: string; onMark: boolean } | null>(null);
 
+  /** The document proxy last loaded, so a stale page scan can tell it lost. */
+  const loadedPdfRef = useRef<any>(null);
+
   const onDocumentLoadSuccess = useCallback(async (pdf: any) => {
+    loadedPdfRef.current = pdf;
     setNumPages(pdf.numPages);
     setLoading(false);
     setError(null);
@@ -114,6 +129,20 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     } catch {
       // Keep the A4-ish default; spacers are only an estimate anyway.
     }
+
+    // Loading a page proxy reads only its dictionary, not its content, so
+    // this is cheap even for a long document.
+    const aspects = new Map<number, number>();
+    for (let page = 1; page <= pdf.numPages; page++) {
+      if (loadedPdfRef.current !== pdf) return; // A newer document replaced it
+      try {
+        const viewport = (await pdf.getPage(page)).getViewport({ scale: 1 });
+        if (viewport.width > 0) aspects.set(page, viewport.height / viewport.width);
+      } catch {
+        // Falls back to the page 1 estimate.
+      }
+    }
+    if (loadedPdfRef.current === pdf) setPageAspects(aspects);
   }, []);
 
   // Fit-to-width, kept correct as the pane is resized. The old code measured
@@ -140,6 +169,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // A new document invalidates every page's text.
   useEffect(() => {
     setTextItemsByPage(new Map());
+    setPageAspects(new Map());
+    loadedPdfRef.current = null;
     setPageNumber(1);
     setRenderWindow({ first: 1, last: 1 });
     pageNodes.current.clear();
@@ -444,6 +475,19 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     if (followed?.key === key && (followed.onMark || !mark)) return;
     followedRef.current = { key, onMark: Boolean(mark) };
 
+    // Leave the view alone while the sentence is already on screen - or, before
+    // its mark exists, while its page is - so reading along is not jolted by a
+    // re-centre on every sentence.
+    const container = containerRef.current;
+    if (container) {
+      const view = container.getBoundingClientRect();
+      const rect = (mark ?? pageNode).getBoundingClientRect();
+      const onScreen = mark
+        ? rect.top >= view.top && rect.bottom <= view.bottom
+        : rect.bottom > view.top && rect.top < view.bottom;
+      if (onScreen) return;
+    }
+
     // A quarter-screen of lead-in, so the sentence is not flush against the
     // top edge with all its context above the fold.
     if (mark) scrollNodeToTop(mark, (containerRef.current?.clientHeight ?? 0) / 4);
@@ -639,7 +683,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                     className="pdf-page"
                     style={{
                       width,
-                      minHeight: isRendered ? undefined : width * pageAspect,
+                      // Held even while rendered: until its canvas paints, a
+                      // page would otherwise collapse to its loading text.
+                      minHeight: width * (pageAspects.get(page) ?? pageAspect),
                       backgroundColor: "white",
                       boxShadow: "0 1px 4px rgba(0,0,0,0.12)",
                     }}
