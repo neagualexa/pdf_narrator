@@ -108,6 +108,7 @@ export function normalizeSentence(sentence: string): string {
 export function findNormalizedRange(
   page: NormalizedPage,
   sentence: string,
+  { requireTail = false }: { requireTail?: boolean } = {},
 ): { start: number; end: number } | null {
   const target = normalizeSentence(sentence);
   if (target.length < MIN_MATCHABLE || page.norm.length === 0) return null;
@@ -158,17 +159,130 @@ export function findNormalizedRange(
     // Nothing confirmed the match. A long anchor is distinctive enough to
     // stand alone; a short one is not, so fail closed rather than highlight
     // the wrong passage.
-    if (headUsed < TRUSTED_HEAD) return null;
+    if (requireTail || headUsed < TRUSTED_HEAD) return null;
     end = Math.min(page.norm.length, start + target.length);
   }
 
   return end > start ? { start, end } : null;
 }
 
+/** Length of the target slices `findInsertedItems` aligns with. */
+const ALIGN_CHUNK = 6;
+/** Furthest an aligned slice may sit past the last one: the longest insertion bridged. */
+const ALIGN_MAX_GAP = 240;
+/** Extra page characters a gap may hold over the sentence's before it counts as inserted. */
+const ALIGN_SLACK = 3;
+/**
+ * Share of a gap's slices that must be absent from the sentence. Greedy
+ * alignment can jump ahead over words the sentence does say, when the backend
+ * read them in a different order; those words are still found in the sentence.
+ */
+const INSERTED_SHARE = 0.6;
+
+/**
+ * Text items inside a matched span that the sentence does not contain at all.
+ *
+ * A span is contiguous in the page's text, but the sentence need not be: one
+ * that runs from the foot of one column to the head of the next has the next
+ * column's running head and page number in the middle of it ("...the proposed
+ * ALTERNATIVE PATTERNS OF COMMUNICATION 169 changes..."). The narrator never
+ * says those, so they should not light up with the sentence either.
+ *
+ * The sentence is walked through the span in short slices. Wherever the page
+ * holds clearly more text between two aligned slices than the sentence does,
+ * that text was inserted; a gap about the size of the sentence's own is just
+ * OCR misreading a word, and stays. A gap must also be mostly text the
+ * sentence does not contain anywhere, so a misalignment over words that are
+ * spoken - just read in another order - cannot punch a hole in the sentence.
+ * Only items lying wholly inside an insertion are reported, so a citation
+ * sharing an item with the sentence's own words keeps its highlight rather
+ * than leaving a hole mid-line.
+ */
+export function findInsertedItems(
+  page: NormalizedPage,
+  range: { start: number; end: number },
+  target: string,
+): Set<number> {
+  const inserted = new Set<number>();
+  const { norm, itemOf } = page;
+
+  // Aligned stretches, as [pageStart, targetStart, length].
+  const aligned: [number, number, number][] = [];
+  let p = range.start;
+  let t = 0;
+  while (t + ALIGN_CHUNK <= target.length && p < range.end) {
+    const at = norm.indexOf(target.slice(t, t + ALIGN_CHUNK), p);
+    if (at === -1 || at + ALIGN_CHUNK > range.end || at - p > ALIGN_MAX_GAP) {
+      t += 1;
+      continue;
+    }
+    let length = ALIGN_CHUNK;
+    while (
+      at + length < range.end &&
+      t + length < target.length &&
+      norm[at + length] === target[t + length]
+    ) {
+      length += 1;
+    }
+    aligned.push([at, t, length]);
+    p = at + length;
+    t += length;
+  }
+
+  // Too little lined up to tell an insertion from a misread: change nothing.
+  const matched = aligned.reduce((sum, [, , length]) => sum + length, 0);
+  if (matched < target.length * 0.5) return inserted;
+
+  const candidates = new Set<number>();
+  const markGap = (from: number, to: number) => {
+    // Slice the gap the same way the sentence was aligned, and see how much of
+    // it the sentence says anywhere at all.
+    let pieces = 0;
+    let foreign = 0;
+    for (let i = from; i + ALIGN_CHUNK <= to; i += ALIGN_CHUNK) {
+      pieces += 1;
+      if (!target.includes(norm.slice(i, i + ALIGN_CHUNK))) foreign += 1;
+    }
+    if (pieces === 0 || foreign < pieces * INSERTED_SHARE) return;
+    for (let i = from; i < to; i += 1) candidates.add(itemOf[i]);
+  };
+
+  for (let k = 1; k < aligned.length; k += 1) {
+    const [prevPage, prevTarget, prevLength] = aligned[k - 1];
+    const [nextPage, nextTarget] = aligned[k];
+    const pageGap = nextPage - (prevPage + prevLength);
+    const targetGap = nextTarget - (prevTarget + prevLength);
+    if (pageGap > targetGap + ALIGN_SLACK) {
+      markGap(prevPage + prevLength, nextPage);
+    }
+  }
+
+  // An item counts only if none of its characters were aligned with the
+  // sentence - every character of it in the span must lie inside a gap.
+  const alignedItems = new Set<number>();
+  for (const [at, , length] of aligned) {
+    for (let i = at; i < at + length; i += 1) alignedItems.add(itemOf[i]);
+  }
+  candidates.forEach((item) => {
+    if (!alignedItems.has(item)) inserted.add(item);
+  });
+
+  return inserted;
+}
+
 export interface SentenceCandidate {
   /** Index into the app's `sentences` array - what playback is started with. */
   index: number;
   text: string;
+  /**
+   * Tagged to an earlier page, so only tried here in case the tagging is off.
+   * Such a sentence is usually already highlighted on its own page, and its
+   * opening recurring here is more likely a running head that shares its
+   * words ("ALTERNATIVE PATTERNS OF COMMUNICATION 171" against a section
+   * titled "Alternative Patterns of Communication in Mathematics Class"), so
+   * it must be confirmed by its ending as well.
+   */
+  lookbehind?: boolean;
 }
 
 /** One contiguous run inside a single text item, owned by one sentence. */
@@ -205,10 +319,10 @@ export function candidatesForPage(
   sentencePages: number[],
   page: number,
 ): SentenceCandidate[] {
-  const toCandidate = (index: number): SentenceCandidate => ({
-    index,
-    text: sentences[index],
-  });
+  const toCandidate = (index: number, lookbehind = false): SentenceCandidate =>
+    lookbehind
+      ? { index, text: sentences[index], lookbehind }
+      : { index, text: sentences[index] };
 
   if (sentencePages.length !== sentences.length) {
     if (!warnedMissingPages && sentences.length > MAX_CANDIDATES) {
@@ -230,7 +344,10 @@ export function candidatesForPage(
     else if (sentencePages[i] === page - 1) previous.push(i);
   }
 
-  return [...previous.slice(-PAGE_LOOKBEHIND), ...current].map(toCandidate);
+  return [
+    ...previous.slice(-PAGE_LOOKBEHIND).map((index) => toCandidate(index, true)),
+    ...current.map((index) => toCandidate(index)),
+  ];
 }
 
 /**
@@ -249,12 +366,23 @@ export function findSentenceSegments(
   const page = normalizePage(items);
   if (page.norm.length === 0) return segments;
 
-  const placed: { start: number; end: number; sentenceIndex: number }[] = [];
+  const placed: {
+    start: number;
+    end: number;
+    sentenceIndex: number;
+    skip: Set<number>;
+  }[] = [];
   for (const candidate of candidates) {
     if (!candidate.text) continue;
-    const range = findNormalizedRange(page, candidate.text);
+    const range = findNormalizedRange(page, candidate.text, {
+      requireTail: candidate.lookbehind,
+    });
     if (range) {
-      placed.push({ ...range, sentenceIndex: candidate.index });
+      placed.push({
+        ...range,
+        sentenceIndex: candidate.index,
+        skip: findInsertedItems(page, range, normalizeSentence(candidate.text)),
+      });
     }
   }
 
@@ -269,9 +397,11 @@ export function findSentenceSegments(
   placed.sort((a, b) => a.start - b.start || a.sentenceIndex - b.sentenceIndex);
 
   const owner = new Int32Array(page.norm.length).fill(-1);
-  for (const { start, end, sentenceIndex } of placed) {
+  for (const { start, end, sentenceIndex, skip } of placed) {
     for (let i = start; i < end && i < owner.length; i += 1) {
-      owner[i] = sentenceIndex;
+      // Skipped text sits inside this sentence's span, so it belongs to no
+      // sentence - not to a predecessor whose overlong tail reached it.
+      owner[i] = skip.has(page.itemOf[i]) ? -1 : sentenceIndex;
     }
   }
 

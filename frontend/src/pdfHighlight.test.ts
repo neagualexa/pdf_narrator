@@ -215,6 +215,43 @@ describe("sentence segments", () => {
   });
 });
 
+describe("text inserted into a sentence", () => {
+  test("a running head between two columns is not part of the sentence", () => {
+    const page = items(
+      "In addition, the proposed",
+      "ALTERNATIVE PATTERNS OF COMMUNICATION",
+      "169",
+      "changes currently advocated for reform in mathematics education sup-",
+      "port a more dialogic view of communication (NCTM 1989, 1991).",
+    );
+    const sentence =
+      "In addition, the proposed changes currently advocated for reform in mathematics education support a more dialogic view of communication.";
+    const segs = findSentenceSegments(page, [{ index: 7, text: sentence }]);
+
+    expect(Array.from(segs.keys()).sort()).toEqual([0, 3, 4]);
+  });
+
+  test("an OCR misread inside the sentence keeps its item highlighted", () => {
+    const page = items(
+      "The pattern of interaction ",
+      "difected",
+      " toward a specific response reflects a different stance.",
+    );
+    const sentence = "The pattern of interaction directed toward a specific response reflects a different stance.";
+    const segs = findSentenceSegments(page, [{ index: 0, text: sentence }]);
+
+    expect(Array.from(segs.keys()).sort()).toEqual([0, 1, 2]);
+  });
+
+  test("a citation sharing an item with the sentence keeps its highlight", () => {
+    const page = items("Wertsch and Toma (1995) characterize communication in classrooms as univocal.");
+    const sentence = "Wertsch and Toma characterize communication in classrooms as univocal.";
+    const segs = findSentenceSegments(page, [{ index: 0, text: sentence }]);
+
+    expect(segs.get(0)).toHaveLength(1);
+  });
+});
+
 describe("text item markup", () => {
   const seg = (from: number, to: number, sentenceIndex: number): SentenceSegment => ({
     from,
@@ -258,6 +295,27 @@ describe("page candidates", () => {
     const got = candidatesForPage(sentences, pages, 2);
     expect(got.map((c) => c.index)).toEqual([1, 2, 3, 4]);
     expect(got.map((c) => c.text)).toEqual(["b", "c", "d", "e"]);
+  });
+
+  test("only the previous page's sentences are flagged as lookbehind", () => {
+    const got = candidatesForPage(sentences, pages, 2);
+    expect(got.map((c) => Boolean(c.lookbehind))).toEqual([true, true, false, false]);
+  });
+
+  test("a previous page's sentence needs its ending to match, not just its opening", () => {
+    // The next page's running head shares the section title's opening words;
+    // anchoring on them alone used to paint the head and the text after it.
+    const sentence =
+      "ALTERNATIVE PATTERNS OF COMMUNICATION IN MATHEMATICS CLASS Results from both quantitative and qualitative research indicate that students learn.";
+    const page = items(
+      "ALTERNATIVE PATTERNS OF COMMUNICATION",
+      "171",
+      "Jim: 15. Teacher: And 9 is one more than 8. So 15 plus one more is?",
+    );
+
+    expect(allSegments(findSentenceSegments(page, [{ index: 0, text: sentence, lookbehind: true }]))).toEqual([]);
+    // Tagged to this page it is still trusted on its opening alone.
+    expect(allSegments(findSentenceSegments(page, [{ index: 0, text: sentence }]))).not.toEqual([]);
   });
 
   test("the first page has nothing to look behind at", () => {
