@@ -682,10 +682,13 @@ body.is-resizing {
   transition: width 0.25s ease;
 }
 
-/* Autoplay switch - makes the continuous-reading behaviour of the play button
-   explicit instead of implied. */
+/* On/off switch - Autoplay in the transport bar, Follow audio in the PDF
+   controls. Makes each behaviour explicit instead of implied. */
 .autoplay-toggle {
   margin-left: 0.5rem;
+}
+
+.toggle-switch {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -705,18 +708,18 @@ body.is-resizing {
     color 0.15s ease;
 }
 
-.autoplay-toggle:hover {
+.toggle-switch:hover {
   border-color: var(--teal-500);
   color: var(--teal-800);
 }
 
-.autoplay-toggle.is-on {
+.toggle-switch.is-on {
   border-color: var(--teal-500);
   background-color: var(--teal-50);
   color: var(--teal-800);
 }
 
-.autoplay-track {
+.toggle-switch-track {
   position: relative;
   width: 1.75rem;
   height: 0.875rem;
@@ -726,11 +729,11 @@ body.is-resizing {
   transition: background-color 0.15s ease;
 }
 
-.autoplay-toggle.is-on .autoplay-track {
+.toggle-switch.is-on .toggle-switch-track {
   background-color: var(--teal-600);
 }
 
-.autoplay-knob {
+.toggle-switch-knob {
   position: absolute;
   top: 0.125rem;
   left: 0.125rem;
@@ -741,7 +744,7 @@ body.is-resizing {
   transition: transform 0.15s ease;
 }
 
-.autoplay-toggle.is-on .autoplay-knob {
+.toggle-switch.is-on .toggle-switch-knob {
   transform: translateX(0.875rem);
 }
 

@@ -528,6 +528,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     scrollToPage(Math.max(1, pageNumber - 1));
   }, [pageNumber, scrollToPage]);
 
+  // Turning follow back on forgets what was last followed, so the follow
+  // effect jumps straight to the sentence playing now instead of waiting for
+  // the next one.
+  const toggleFollow = useCallback(() => {
+    if (!followPlayback) followedRef.current = null;
+    setFollowPlayback(!followPlayback);
+  }, [followPlayback]);
+
   const goToNextPage = useCallback(() => {
     setFollowPlayback(false);
     scrollToPage(numPages ? Math.min(numPages, pageNumber + 1) : pageNumber);
@@ -1018,29 +1026,24 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
             }}
           />
 
-          {/* Follow playback */}
-          <StyledButton
-            type="toolbar"
-            active={followPlayback}
-            onClick={() => setFollowPlayback((on) => !on)}
+          {/* Follow audio - the same switch as Autoplay in the transport bar */}
+          <button
+            type="button"
+            className={`toggle-switch ${followPlayback ? "is-on" : ""}`}
+            onClick={toggleFollow}
+            role="switch"
+            aria-checked={followPlayback}
             title={
               followPlayback
-                ? "Follow playback: on - the page turns with the narration"
-                : "Follow playback: off - click to track the narration again"
+                ? "Follow audio on: the page turns with the narration"
+                : "Follow audio off: turn on to jump to the sentence playing now"
             }
           >
-            <svg
-              width="13"
-              height="13"
-              fill="currentColor"
-              viewBox="0 0 16 16"
-              aria-hidden="true"
-            >
-              <path d="M4.715 6.542 3.343 7.914a3 3 0 1 0 4.243 4.243l1.828-1.829A3 3 0 0 0 8.586 5.5L8 6.086a1.002 1.002 0 0 0-.154.199 2 2 0 0 1 .861 3.337L6.88 11.45a2 2 0 1 1-2.83-2.83l.793-.792a4.018 4.018 0 0 1-.128-1.287z" />
-              <path d="M6.586 4.672A3 3 0 0 0 7.414 9.5l.775-.776a2 2 0 0 1-.896-3.346L9.12 3.55a2 2 0 1 1 2.83 2.83l-.793.792c.112.42.155.855.128 1.287l1.372-1.372a3 3 0 1 0-4.243-4.243L6.586 4.672z" />
-            </svg>
-            Follow
-          </StyledButton>
+            <span className="toggle-switch-track" aria-hidden="true">
+              <span className="toggle-switch-knob" />
+            </span>
+            Follow audio
+          </button>
 
           {/* Divider */}
           <div
@@ -1082,7 +1085,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                 onMouseLeave={() => setShowHelp(false)}
               >
                 Pinch or Ctrl+Scroll: zoom • Alt+Click text: play from that sentence •
-                Follow: page turns with narration
+                Follow audio: page turns with narration
                 <div
                   style={{
                     position: "absolute",

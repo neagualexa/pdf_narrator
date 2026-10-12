@@ -124,7 +124,7 @@ export const TransportBar: React.FC<TransportBarProps> = ({
 
     <button
       type="button"
-      className={`autoplay-toggle ${autoplayEnabled ? "is-on" : ""}`}
+      className={`toggle-switch autoplay-toggle ${autoplayEnabled ? "is-on" : ""}`}
       onClick={onToggleAutoplay}
       role="switch"
       aria-checked={autoplayEnabled}
@@ -134,8 +134,8 @@ export const TransportBar: React.FC<TransportBarProps> = ({
           : "Autoplay off: playback stops at the end of each sentence"
       }
     >
-      <span className="autoplay-track" aria-hidden="true">
-        <span className="autoplay-knob" />
+      <span className="toggle-switch-track" aria-hidden="true">
+        <span className="toggle-switch-knob" />
       </span>
       Autoplay
     </button>
