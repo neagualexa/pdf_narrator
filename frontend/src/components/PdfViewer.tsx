@@ -2,6 +2,7 @@ import React, {
   useState,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
 } from "react";
@@ -22,6 +23,17 @@ pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/b
 
 /** Class marking every sentence wrapper; the hover and playing states are added to it. */
 const SENTENCE_SELECTOR = "mark[data-sentence-index]";
+
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 3.0;
+/** Zoom per pixel of ctrl+wheel delta: a full pinch roughly doubles or halves. */
+const WHEEL_ZOOM_SPEED = 0.01;
+/** Largest delta one wheel event may count for, so a mouse notch is ~28%. */
+const WHEEL_ZOOM_MAX_DELTA = 25;
+/** Quiet time after the last zoom change before pages re-render sharp. */
+const ZOOM_SETTLE_MS = 150;
+/** Longest a pre-zoom snapshot may cover a page whose re-render never lands. */
+const SNAPSHOT_MAX_MS = 3000;
 
 interface PdfViewerProps {
   file: string | File | null;
@@ -61,6 +73,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [scale, setScale] = useState<number>(1.0);
+  /** The scale pages are actually rendered at; trails `scale` until a zoom settles. */
+  const [renderScale, setRenderScale] = useState<number>(1.0);
   const [baseWidth, setBaseWidth] = useState<number>(600);
   const [showHelp, setShowHelp] = useState<boolean>(false);
   const [followPlayback, setFollowPlayback] = useState<boolean>(true);
@@ -519,34 +533,199 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     scrollToPage(numPages ? Math.min(numPages, pageNumber + 1) : pageNumber);
   }, [numPages, pageNumber, scrollToPage]);
 
+  /**
+   * The point a zoom is anchored on: where it sat within its page, and where
+   * on screen it must stay. Applied once the new scale has laid out.
+   */
+  const zoomAnchor = useRef<{
+    page: number;
+    fx: number;
+    fy: number;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
+
+  /**
+   * Changes the scale while holding the document point at (clientX, clientY)
+   * still on screen - the pointer for a pinch, the pane's centre otherwise.
+   * Without this the scroll offset stays put while the pages grow, so the
+   * content under the pointer slides away, often onto another page.
+   */
+  const zoomTo = useCallback(
+    (update: (scale: number) => number, clientX?: number, clientY?: number) => {
+      const container = containerRef.current;
+      if (container) {
+        const box = container.getBoundingClientRect();
+        const x = clientX ?? box.left + box.width / 2;
+        const y = clientY ?? box.top + box.height / 2;
+
+        // Every page has a wrapper of its true size, rendered or not. Half the
+        // inter-page gap either side, so a point between pages still anchors.
+        zoomAnchor.current = null;
+        pageNodes.current.forEach((node, page) => {
+          const rect = node.getBoundingClientRect();
+          if (y < rect.top - 6 || y > rect.bottom + 6) return;
+          zoomAnchor.current = {
+            page,
+            fx: (x - rect.left) / rect.width,
+            fy: (y - rect.top) / rect.height,
+            clientX: x,
+            clientY: y,
+          };
+        });
+      }
+
+      setScale((current) =>
+        Math.min(MAX_SCALE, Math.max(MIN_SCALE, update(current))),
+      );
+    },
+    [],
+  );
+
+  // Before paint, so the view never flashes at the unanchored position.
+  useLayoutEffect(() => {
+    const anchor = zoomAnchor.current;
+    zoomAnchor.current = null;
+    const container = containerRef.current;
+    const node = anchor && pageNodes.current.get(anchor.page);
+    if (!anchor || !container || !node) return;
+
+    const rect = node.getBoundingClientRect();
+    container.scrollLeft += rect.left + anchor.fx * rect.width - anchor.clientX;
+    container.scrollTop += rect.top + anchor.fy * rect.height - anchor.clientY;
+  }, [scale]);
+
   const zoomIn = useCallback(() => {
-    setScale((prevScale) => Math.min(prevScale + 0.25, 3.0));
-  }, []);
+    zoomTo((current) => current + 0.25);
+  }, [zoomTo]);
 
   const zoomOut = useCallback(() => {
-    setScale((prevScale) => Math.max(prevScale - 0.25, 0.5));
-  }, []);
+    zoomTo((current) => current - 0.25);
+  }, [zoomTo]);
 
   const resetZoom = useCallback(() => {
-    setScale(1.0);
+    zoomTo(() => 1.0);
+  }, [zoomTo]);
+
+  const removeSnapshot = useCallback((page: number) => {
+    pageNodes.current
+      .get(page)
+      ?.querySelectorAll(".pdf-page-snapshot")
+      .forEach((snapshot) => snapshot.remove());
   }, []);
 
-  // Handle wheel events for zooming only
-  const handleWheel = useCallback(
-    (event: React.WheelEvent) => {
-      if (event.ctrlKey || event.metaKey) {
-        // Zoom with Ctrl/Cmd + scroll
-        event.preventDefault();
-        if (event.deltaY < 0) {
-          zoomIn();
-        } else {
-          zoomOut();
-        }
-      }
-      // Regular scroll now just scrolls within the page normally
-    },
-    [zoomIn, zoomOut]
-  );
+  // Re-render sharp once a zoom settles. Changing a page's width makes pdf.js
+  // reset its canvas and paint it white before drawing, so each rendered page
+  // is first covered with a copy of its current canvas, which its next
+  // onRenderSuccess removes - the page never flashes blank.
+  useEffect(() => {
+    if (scale === renderScale) return;
+
+    const timer = setTimeout(() => {
+      pageNodes.current.forEach((node, page) => {
+        const canvas = node.querySelector<HTMLCanvasElement>(
+          "canvas.react-pdf__Page__canvas",
+        );
+        if (!canvas || !canvas.width || !canvas.height) return;
+
+        removeSnapshot(page);
+        const snapshot = document.createElement("canvas");
+        snapshot.width = canvas.width;
+        snapshot.height = canvas.height;
+        snapshot.getContext("2d")?.drawImage(canvas, 0, 0);
+        snapshot.className = "pdf-page-snapshot";
+        Object.assign(snapshot.style, {
+          position: "absolute",
+          inset: "0",
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+          zIndex: "3",
+        });
+        node.appendChild(snapshot);
+
+        // In case the render never reports back (unmounted, cancelled).
+        setTimeout(() => snapshot.remove(), SNAPSHOT_MAX_MS);
+      });
+      setRenderScale(scale);
+    }, ZOOM_SETTLE_MS);
+
+    return () => clearTimeout(timer);
+  }, [scale, renderScale, removeSnapshot]);
+
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+
+  // Pinch and Ctrl/Cmd+scroll zoom. A trackpad pinch arrives as a stream of
+  // ctrl+wheel events with small deltas (Safari sends gesture events instead),
+  // so the zoom follows the size of each delta rather than stepping a fixed
+  // amount per event, and is applied at most once a frame since every change
+  // re-renders the visible pages. Bound natively because React's wheel
+  // listener is passive, where preventDefault cannot stop the browser zooming
+  // the whole app along with the PDF.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    let pending: ((scale: number) => number) | null = null;
+    let pointer = { x: 0, y: 0 };
+    let frame = 0;
+
+    const schedule = (
+      update: (scale: number) => number,
+      x: number,
+      y: number,
+    ) => {
+      pending = update;
+      pointer = { x, y };
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const apply = pending;
+        pending = null;
+        if (apply) zoomTo(apply, pointer.x, pointer.y);
+      });
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+
+      // Line-mode deltas (Firefox mouse wheels) to pixels, and a cap so one
+      // mouse-wheel notch is a modest step rather than a leap.
+      const pixels = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      const delta = Math.max(-WHEEL_ZOOM_MAX_DELTA, Math.min(WHEEL_ZOOM_MAX_DELTA, pixels));
+      const factor = Math.exp(-delta * WHEEL_ZOOM_SPEED);
+
+      const previous = pending;
+      schedule(
+        (scale) => (previous ? previous(scale) : scale) * factor,
+        event.clientX,
+        event.clientY,
+      );
+    };
+
+    let gestureStartScale = 1;
+    const onGestureStart = (event: Event) => {
+      event.preventDefault();
+      gestureStartScale = scaleRef.current;
+    };
+    const onGestureChange = (event: Event) => {
+      event.preventDefault();
+      const gesture = event as Event & { scale: number; clientX: number; clientY: number };
+      schedule(() => gestureStartScale * gesture.scale, gesture.clientX, gesture.clientY);
+    };
+
+    container.addEventListener("wheel", onWheel, { passive: false });
+    container.addEventListener("gesturestart", onGestureStart);
+    container.addEventListener("gesturechange", onGestureChange);
+    return () => {
+      container.removeEventListener("wheel", onWheel);
+      container.removeEventListener("gesturestart", onGestureStart);
+      container.removeEventListener("gesturechange", onGestureChange);
+      cancelAnimationFrame(frame);
+    };
+  }, [file, zoomTo]);
 
   // Handle keyboard events
   useEffect(() => {
@@ -633,7 +812,6 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       {/* Scrollable PDF Container */}
       <div
         ref={containerRef}
-        onWheel={handleWheel}
         style={{
           height: "calc(100% - 100px)", // Increased from 60px to 80px for more space
           overflow: "auto",
@@ -672,6 +850,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
             {Array.from({ length: numPages ?? 0 }, (_, i) => i + 1).map(
               (page) => {
                 const width = baseWidth * scale;
+                const renderWidth = baseWidth * renderScale;
                 const isRendered =
                   page >= renderWindow.first && page <= renderWindow.last;
 
@@ -682,29 +861,47 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                     data-page-number={page}
                     className="pdf-page"
                     style={{
+                      position: "relative",
                       width,
-                      // Held even while rendered: until its canvas paints, a
-                      // page would otherwise collapse to its loading text.
+                      // The page itself is positioned out of flow below, so
+                      // this alone gives the wrapper its height.
                       minHeight: width * (pageAspects.get(page) ?? pageAspect),
                       backgroundColor: "white",
                       boxShadow: "0 1px 4px rgba(0,0,0,0.12)",
                     }}
                   >
                     {isRendered && (
-                      <Page
-                        pageNumber={page}
-                        width={width}
-                        renderTextLayer={true}
-                        renderAnnotationLayer={true}
-                        onGetTextSuccess={(textContent) =>
-                          handleTextItems(
-                            page,
-                            (textContent?.items ?? []) as PdfTextItem[],
-                          )
-                        }
-                        customTextRenderer={customTextRenderer}
-                        onRenderTextLayerSuccess={handleTextLayerRendered}
-                      />
+                      // Rendered at the settled scale and stretched to the
+                      // live one, so a zoom in progress costs no re-render.
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: renderWidth,
+                          transform:
+                            scale === renderScale
+                              ? undefined
+                              : `scale(${scale / renderScale})`,
+                          transformOrigin: "0 0",
+                        }}
+                      >
+                        <Page
+                          pageNumber={page}
+                          width={renderWidth}
+                          renderTextLayer={true}
+                          renderAnnotationLayer={true}
+                          onGetTextSuccess={(textContent) =>
+                            handleTextItems(
+                              page,
+                              (textContent?.items ?? []) as PdfTextItem[],
+                            )
+                          }
+                          customTextRenderer={customTextRenderer}
+                          onRenderSuccess={() => removeSnapshot(page)}
+                          onRenderTextLayerSuccess={handleTextLayerRendered}
+                        />
+                      </div>
                     )}
                   </div>
                 );
@@ -737,7 +934,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           <div style={{ display: "flex", gap: "5px", alignItems: "center" }}>
             <StyledButton
               onClick={zoomOut}
-              disabled={scale <= 0.5}
+              disabled={scale <= MIN_SCALE}
               type="primary"
               title="Zoom Out (Ctrl + -)"
             >
@@ -760,7 +957,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
             <StyledButton
               onClick={zoomIn}
-              disabled={scale >= 3.0}
+              disabled={scale >= MAX_SCALE}
               type="primary"
               title="Zoom In (Ctrl + +)"
             >
@@ -884,7 +1081,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                 onMouseEnter={() => setShowHelp(true)}
                 onMouseLeave={() => setShowHelp(false)}
               >
-                Ctrl+Scroll: zoom • Alt+Click text: play from that sentence •
+                Pinch or Ctrl+Scroll: zoom • Alt+Click text: play from that sentence •
                 Follow: page turns with narration
                 <div
                   style={{
