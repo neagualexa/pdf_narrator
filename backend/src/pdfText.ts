@@ -206,10 +206,25 @@ export function renderTextContent(
     .join(BLOCK_BREAK);
 }
 
-/** Narrowest empty band, in multiples of the body font size, that reads as a gutter. */
-const GUTTER_MIN_RATIO = 1.5;
-/** Share of lines allowed to bridge a gutter: titles and running heads spanning both columns. */
+/**
+ * Narrowest empty band, in multiples of the body font size, that reads as a
+ * gutter. IEEE two-column papers leave only ~12pt between 10pt columns, so this
+ * must sit below 1.2; a word space (~0.3) is still far narrower.
+ */
+const GUTTER_MIN_RATIO = 0.8;
+/**
+ * Share of lines allowed to bridge a gutter on their own, such as running
+ * heads spanning both columns.
+ */
 const GUTTER_CROSSING_SHARE = 0.15;
+/**
+ * Consecutive lines bridging a gutter that make a full-width block (a paper's
+ * title and author list, a wide caption) rather than stray crossings; such
+ * blocks are exempt from GUTTER_CROSSING_SHARE.
+ */
+const SPANNING_BLOCK_MIN_LINES = 3;
+/** Share of lines that must leave a gutter empty, so spanning blocks cannot dominate. */
+const GUTTER_MIN_EMPTY_SHARE = 0.4;
 /** Share of the text each side of a gutter must hold, so indents and bullets never split off. */
 const COLUMN_MIN_SHARE = 0.2;
 /** Lines each side of a gutter must hold; a short page has no room to prove a gutter. */
@@ -237,16 +252,38 @@ function findGutter(lines: Run[][]): { from: number; to: number } | null {
   const span = Math.ceil(maxX - minX);
   if (!(span > 0) || span > 10000) return null;
 
-  // How many lines put ink into each one-unit slice of the page's width.
-  const coverage = new Int32Array(span + 1);
-  for (const line of lines) {
-    const covered = new Uint8Array(span + 1);
+  // Which one-unit slices of the page's width each line puts ink into.
+  const covered = lines.map((line) => {
+    const row = new Uint8Array(span + 1);
     for (const r of line) {
       const from = Math.max(0, Math.floor(r.x - minX));
       const to = Math.min(span, Math.ceil(r.x + r.width - minX));
-      covered.fill(1, from, to + 1);
+      row.fill(1, from, to + 1);
     }
-    covered.forEach((on, i) => (coverage[i] += on));
+    return row;
+  });
+
+  // How many lines put stray ink into each slice. Lines arrive top to bottom,
+  // and a solid block of lines bridging the slice is a title, author list or
+  // full-width caption, which splitColumns keeps whole, so only lines crossing
+  // it on their own count. Without enough lines leaving it empty, though, the
+  // slice is just text.
+  const coverage = new Int32Array(span + 1);
+  for (let i = 0; i <= span; i += 1) {
+    let empty = 0;
+    let stray = 0;
+    let block = 0;
+    for (const row of covered) {
+      if (row[i]) {
+        block += 1;
+        continue;
+      }
+      empty += 1;
+      if (block < SPANNING_BLOCK_MIN_LINES) stray += block;
+      block = 0;
+    }
+    if (block < SPANNING_BLOCK_MIN_LINES) stray += block;
+    coverage[i] = empty >= lines.length * GUTTER_MIN_EMPTY_SHARE ? stray : lines.length;
   }
 
   const allowed = Math.floor(lines.length * GUTTER_CROSSING_SHARE);
@@ -297,7 +334,21 @@ function splitColumns(runs: Run[], depth = 0): Run[][] {
   const gutter = findGutter(lines);
   if (!gutter) return [runs];
 
-  const bridges = (r: Run) => r.x < gutter.from && r.x + r.width > gutter.to;
+  // A line spans the columns when its ink runs across the gutter without a
+  // real break: one long run, or a centred author list whose runs happen to
+  // split inside the gutter. A column line that merely pokes a word into the
+  // gutter (common in OCR scans) still leaves a wide gap there.
+  const maxGap = (gutter.to - gutter.from) / 2;
+  const bridges = (line: Run[]) => {
+    const sorted = [...line].sort((p, q) => p.x - q.x);
+    if (sorted[0].x >= gutter.from) return false;
+    let reach = sorted[0].x + sorted[0].width;
+    for (const r of sorted.slice(1)) {
+      if (r.x - reach > maxGap && reach < gutter.to && r.x > gutter.from) return false;
+      reach = Math.max(reach, r.x + r.width);
+    }
+    return reach > gutter.to;
+  };
   const isLeft = (r: Run) => r.x + r.width / 2 < (gutter.from + gutter.to) / 2;
 
   const blocks: Run[][] = [];
@@ -312,7 +363,7 @@ function splitColumns(runs: Run[], depth = 0): Run[][] {
   };
 
   for (const line of lines) {
-    if (line.some(bridges)) {
+    if (bridges(line)) {
       flushColumns();
       spanning.push(...line);
       continue;
