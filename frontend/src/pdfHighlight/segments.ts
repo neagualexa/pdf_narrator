@@ -3,7 +3,7 @@
  * per-item runs the text layer is rendered from.
  */
 
-import { findNormalizedRange } from "./match";
+import { findNormalizedRange, SentenceRange } from "./match";
 import { normalizePage, normalizeSentence, PdfTextItem } from "./normalize";
 
 export interface SentenceCandidate {
@@ -95,14 +95,8 @@ interface TextPosition {
   offset: number;
 }
 
-/**
- * Text set at most this fraction of a sentence's own size is not part of it:
- * running heads, footers, page numbers and note marks.
- */
-const SMALL_TEXT_RATIO = 0.85;
-
 // Built at runtime: TypeScript rejects a /u literal for an ES5 target.
-const LETTER = new RegExp("\\p{L}", "u");
+const LETTER_OR_DIGIT = new RegExp("[\\p{L}\\p{N}]", "u");
 
 const CLOSERS = `)\\]}"'\u201d\u2019\u00bb,;:`;
 /**
@@ -118,9 +112,20 @@ const ENDING_RE = new RegExp(
 /** How far past a sentence's last word its ending is looked for. */
 const ENDING_LOOKAHEAD = 240;
 
-function fontSize(item: PdfTextItem): number | undefined {
-  const t = item.transform;
-  return t ? Math.hypot(t[2], t[3]) || undefined : undefined;
+/**
+ * Whether two items sit on the same line: their baselines, measured across the
+ * text's direction, within half the larger one's type size of each other - so
+ * a superscript note mark, raised in smaller type, is still in its line. Items
+ * without geometry count as one line.
+ */
+function sameLine(a: PdfTextItem, b: PdfTextItem): boolean {
+  if (!a.transform || !b.transform) return true;
+  const [ax, bx, cx, dx, x1, y1] = a.transform;
+  const [, , c2, d2, x2, y2] = b.transform;
+  const scale = Math.hypot(ax, bx) || 1;
+  const across = (x: number, y: number) => (-bx * x + ax * y) / scale;
+  const size = Math.max(Math.hypot(cx, dx), Math.hypot(c2, d2));
+  return Math.abs(across(x1, y1) - across(x2, y2)) < size / 2;
 }
 
 /**
@@ -181,7 +186,7 @@ export function findSentenceSegments(
   const page = normalizePage(all);
   if (page.norm.length === 0) return segments;
 
-  const placed: { start: number; end: number; sentenceIndex: number }[] = [];
+  const placed: (SentenceRange & { sentenceIndex: number })[] = [];
   const taken = new Set<number>();
   for (const candidate of candidates) {
     if (!candidate.text) continue;
@@ -203,7 +208,7 @@ export function findSentenceSegments(
   // next begins, and never the other way round.
   placed.sort((a, b) => a.start - b.start || a.sentenceIndex - b.sentenceIndex);
 
-  placed.forEach(({ start, end, sentenceIndex }, k) => {
+  placed.forEach(({ start, end, pieces, sentenceIndex }, k) => {
     const next = placed[k + 1];
     const stop = Math.min(end, next ? next.start : end);
     if (stop <= start) return;
@@ -218,20 +223,19 @@ export function findSentenceSegments(
       limit,
     );
 
-    // The sentence's own size: the one most of its letters are set in.
-    const counts = new Map<number, number>();
-    let ownSize: number | undefined;
-    for (let i = start; i < stop; i += 1) {
-      const size = fontSize(all[page.itemOf[i]]);
-      if (size === undefined) continue;
-      counts.set(size, (counts.get(size) ?? 0) + 1);
-      if (ownSize === undefined || counts.get(size)! > counts.get(ownSize)!) ownSize = size;
+    // The sentence's own text, as exported: the items holding characters
+    // that lined up with it, plus its ending past the last word - on the line
+    // the last word is on, or the line the ending finishes on. A citation
+    // running over a page break thereby keeps both its halves, but not the
+    // footer and running head between them.
+    const own = new Set<number>();
+    pieces.forEach(([pieceFrom, pieceTo]) => {
+      for (let i = pieceFrom; i < Math.min(pieceTo, stop); i += 1) own.add(page.itemOf[i]);
+    });
+    const lastWord = page.itemOf[stop - 1];
+    for (let item = lastWord; item <= to.item; item += 1) {
+      if (sameLine(all[item], all[lastWord]) || sameLine(all[item], all[to.item])) own.add(item);
     }
-    const isSmall = (item: number) => {
-      const size = fontSize(all[item]);
-      return ownSize !== undefined && size !== undefined && size <= ownSize * SMALL_TEXT_RATIO;
-    };
-    const isText = (item: number) => !isSmall(item) && !!(all[item].str ?? "").trim();
 
     const add = (item: number) => {
       const segment: SentenceSegment = {
@@ -245,18 +249,27 @@ export function findSentenceSegments(
       else segments.set(item - firstItem, [segment]);
     };
 
-    // This page's share: the sentence's own text items, and whatever lies
-    // between two of them - spacing, punctuation, note marks - unless it holds
-    // a running head or footer, small text with letters in it.
+    // This page's share runs from its first own item to its last, so the
+    // footer and page number below it, or the running head above, stay out.
+    // Between two own items, what the sentence does not say is filled when it
+    // sits in the line - a citation, a note mark, punctuation - and left out
+    // when it stands on a line of its own: a running head between columns.
     let previous = -1;
     for (let item = Math.max(from.item, firstItem); item <= Math.min(to.item, lastItem); item += 1) {
-      if (!isText(item)) continue;
+      if (!own.has(item)) continue;
       if (previous !== -1) {
-        let furniture = false;
+        let standsApart = false;
         for (let i = previous + 1; i < item; i += 1) {
-          if (isSmall(i) && LETTER.test(all[i].str ?? "")) furniture = true;
+          const text = all[i].str ?? "";
+          if (
+            LETTER_OR_DIGIT.test(text) &&
+            !sameLine(all[i], all[previous]) &&
+            !sameLine(all[i], all[item])
+          ) {
+            standsApart = true;
+          }
         }
-        for (let i = previous + 1; i < item && !furniture; i += 1) add(i);
+        for (let i = previous + 1; i < item && !standsApart; i += 1) add(i);
       }
       add(item);
       previous = item;

@@ -11,8 +11,8 @@ import {
 
 const items = (...strs: string[]) => strs.map((str) => ({ str }));
 
-/** An item set in `size`-point type, as pdf.js reports it. */
-const sized = (size: number, str: string): PdfTextItem => ({ str, transform: [size, 0, 0, size, 0, 0] });
+/** An item set in `size`-point type on the line at height `y`, as pdf.js reports it. */
+const sized = (size: number, str: string, y = 0): PdfTextItem => ({ str, transform: [size, 0, 0, size, 0, y] });
 /** Body text, and the smaller type of running heads, footers and note marks. */
 const body = (...strs: string[]) => strs.map((str) => sized(10, str));
 const small = (str: string) => sized(7.5, str);
@@ -317,10 +317,11 @@ describe("one continuous highlight per sentence", () => {
   });
 
   test("a note mark inside the sentence is covered, not a hole", () => {
+    // A real superscript: smaller, and raised above the line's baseline.
     const page = [
       ...body("only after sufficient repetitions without repetitions"),
-      small("18"),
-      small(" "),
+      sized(6.7, "18", 4.4),
+      sized(6.7, " ", 4.4),
       ...body("(Bernstein, 1996, p. 204) in cooperation with the teacher."),
     ];
     const sentence = "only after sufficient repetitions without repetitions in cooperation with the teacher.";
@@ -329,14 +330,14 @@ describe("one continuous highlight per sentence", () => {
   });
 
   test("a running head between two columns is not part of the sentence", () => {
+    // The foot of one column, then the next column's head and page number on
+    // a line of their own, then that column's first lines.
     const page = [
-      ...body("In addition, the proposed"),
-      small("ALTERNATIVE PATTERNS OF COMMUNICATION"),
-      small("169"),
-      ...body(
-        "changes currently advocated for reform in mathematics education sup-",
-        "port a more dialogic view of communication (NCTM 1989, 1991).",
-      ),
+      sized(10, "In addition, the proposed", 80),
+      sized(10, "ALTERNATIVE PATTERNS OF COMMUNICATION", 700),
+      sized(10, "169", 700),
+      sized(10, "changes currently advocated for reform in mathematics education sup-", 680),
+      sized(10, "port a more dialogic view of communication (NCTM 1989, 1991).", 668),
     ];
     const sentence =
       "In addition, the proposed changes currently advocated for reform in mathematics education support a more dialogic view of communication.";
@@ -512,6 +513,33 @@ describe("sentences crossing a page break", () => {
       { before: page11 },
     );
     expect(owned(segs)).toEqual([2, 3]);
+  });
+});
+
+describe("text the sentence does not say", () => {
+  test("a body-size page number and running head are left out at a page break", () => {
+    // As in a real paper: the page number set like the body, and the next
+    // page's head in bold body-size type, both on lines of their own.
+    const sentence =
+      "Sacks et al. defined conversation through locally managed, party-administered turn-taking, in which speakers themselves negotiate who speaks next, when, and for how long.";
+    const page2 = [
+      sized(10, "Sacks et al. (1974) defined conversation through locally", 120),
+      sized(10, "managed, party-administered turn-taking, in which speak-", 108),
+      sized(10, "ers themselves negotiate who speaks next, when, and for", 96),
+      sized(10, "2", 40),
+    ];
+    const page3 = [
+      sized(10, "Rethinking Scaffolding in LLM Tutors: The Interactional Mismatch", 760),
+      sized(10, "how long. In LLM chats, turn order is rigid and interface-predetermined.", 730),
+    ];
+
+    const onPage2 = findSentenceSegments(page2, [{ index: 0, text: sentence }], { after: page3 });
+    expect(Array.from(onPage2.keys())).toEqual([0, 1, 2]);
+
+    const onPage3 = findSentenceSegments(page3, [{ index: 0, text: sentence, lookbehind: true }], { before: page2 });
+    expect(Array.from(onPage3.keys())).toEqual([1]);
+    const [{ from, to }] = onPage3.get(1)!;
+    expect(page3[1].str.slice(from, to)).toBe("how long.");
   });
 });
 

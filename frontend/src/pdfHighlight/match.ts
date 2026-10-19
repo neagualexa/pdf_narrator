@@ -46,9 +46,22 @@ const MIN_LINED_UP = 0.75;
  */
 const TRUSTED_OPENING = 24;
 
+/** Where a sentence sits on the page, and which of it lined up with the sentence. */
+export interface SentenceRange {
+  start: number;
+  end: number;
+  /**
+   * The stretches of `norm` [from, to) the sentence's own characters lined up
+   * with. What lies between them is text the sentence does not say: a
+   * citation, a note mark, or a page's footer and the next page's head.
+   */
+  pieces: [number, number][];
+}
+
 interface Walk {
   /** Just past the last page character lined up. */
   end: number;
+  pieces: [number, number][];
   /** Characters of the sentence lined up. */
   linedUp: number;
   /** Length of the unbroken stretch at the start. */
@@ -70,19 +83,23 @@ function walk(norm: string, target: string, start: number): Walk {
   let t = 0;
   let linedUp = 0;
   let opening = -1;
+  const pieces: [number, number][] = [];
 
   for (;;) {
     const run = agreement(norm, p, target, t);
+    if (run > 0) pieces.push([p, p + run]);
     p += run;
     t += run;
     linedUp += run;
     if (opening === -1) opening = run;
-    if (t === target.length) return { end: p, linedUp, opening, complete: true };
+    if (t === target.length) return { end: p, pieces, linedUp, opening, complete: true };
 
-    // Resume where the two agree longest from then on. Neither skipping the
-    // least nor resuming nearest will do: either can land on a later word that
-    // merely recurs nearby ("whole-class scaffolding" for "computer-based
-    // scaffolding"), where the agreement soon runs out again.
+    // Resume skipping as little of the sentence as possible, at a place
+    // where the two then agree for long enough to be distinctive - otherwise
+    // wherever they agree longest. Resuming nearest can land on a later word
+    // that merely recurs nearby ("whole-class scaffolding" for "computer-based
+    // scaffolding"); resuming where agreement is longest gives up words the
+    // page does say ("and in some cases" before "these terms are...").
     const ahead = norm.slice(p, p + MAX_PAGE_SKIP + PIECE);
     let best = { run: 0, at: 0, skip: 0 };
     for (let skip = 0; skip <= MAX_SENTENCE_SKIP; skip += 1) {
@@ -92,9 +109,14 @@ function walk(norm: string, target: string, start: number): Walk {
       const at = ahead.indexOf(piece);
       if (at === -1) continue;
       const resumed = agreement(norm, p + at, target, t + skip);
+      const distinctive = resumed >= MIN_MATCHABLE || t + skip + resumed === target.length;
+      if (distinctive) {
+        best = { run: resumed, at, skip };
+        break;
+      }
       if (resumed > best.run) best = { run: resumed, at, skip };
     }
-    if (best.run === 0) return { end: p, linedUp, opening, complete: false };
+    if (best.run === 0) return { end: p, pieces, linedUp, opening, complete: false };
     p += best.at;
     t += best.skip;
   }
@@ -119,38 +141,42 @@ export function findNormalizedRange(
     requireTail = false,
     taken,
   }: { requireTail?: boolean; taken?: ReadonlySet<number> } = {},
-): { start: number; end: number } | null {
+): SentenceRange | null {
   const { norm } = page;
   if (target.length < MIN_MATCHABLE || norm.length === 0) return null;
 
-  let best: { start: number; end: number; linedUp: number } | null = null;
-  let unconfirmed = { start: -1, opening: TRUSTED_OPENING - 1 };
+  let best: (SentenceRange & { linedUp: number }) | null = null;
+  let unconfirmed: { start: number; opening: number; pieces: [number, number][] } = {
+    start: -1,
+    opening: TRUSTED_OPENING - 1,
+    pieces: [],
+  };
 
   const opening = target.slice(0, SEED);
   for (let start = norm.indexOf(opening); start !== -1; start = norm.indexOf(opening, start + 1)) {
     if (taken?.has(start)) continue;
 
-    const { end, linedUp, opening: unbroken, complete } = walk(norm, target, start);
+    const { end, pieces, linedUp, opening: unbroken, complete } = walk(norm, target, start);
     if (complete && linedUp >= target.length * MIN_LINED_UP) {
       if (
         !best ||
         linedUp > best.linedUp ||
         (linedUp === best.linedUp && end - start < best.end - best.start)
       ) {
-        best = { start, end, linedUp };
+        best = { start, end, pieces, linedUp };
       }
     } else if (unbroken > unconfirmed.opening) {
-      unconfirmed = { start, opening: unbroken };
+      unconfirmed = { start, opening: unbroken, pieces };
     }
   }
 
-  if (best) return { start: best.start, end: best.end };
+  if (best) return { start: best.start, end: best.end, pieces: best.pieces };
 
   // No walk reached the ending. The longest unbroken opening may stand alone
   // if it is long enough - the ending can be cut off at the foot of the last
   // page - but a short one is no evidence, so fail closed rather than
   // highlight the wrong passage.
-  const { start } = unconfirmed;
+  const { start, pieces } = unconfirmed;
   if (requireTail || start === -1) return null;
-  return { start, end: Math.min(norm.length, start + target.length) };
+  return { start, end: pieces[pieces.length - 1][1], pieces };
 }
