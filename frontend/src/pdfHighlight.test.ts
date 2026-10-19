@@ -109,6 +109,31 @@ describe("anchor robustness", () => {
     expect(page[0].str.slice(s, e)).toContain("(Smith, 2019)");
     expect(page[0].str.slice(s, e)).toContain("database");
   });
+
+  test("a running head sharing the opening does not steal the match", () => {
+    // The head occurs first in the running head, where the ending does not
+    // follow; the real sentence, interrupted by a citation, comes later.
+    const page = items(
+      "Alternative patterns of communication in mathematics 171 ",
+      "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris. ",
+      "Alternative patterns of communication in mathematics (Smith 2011) are studied in this short article here.",
+    );
+    const r = findHighlightRanges(
+      page,
+      "Alternative patterns of communication in mathematics are studied in this short article here.",
+    );
+    expect(Array.from(r.keys())).toEqual([2]);
+  });
+
+  test("an unconfirmed long anchor is used only when no anchor confirms", () => {
+    // The ending is off the page entirely, so the trusted head stands alone.
+    const page = items("The study of language use and classroom interaction began.");
+    const r = findHighlightRanges(
+      page,
+      "The study of language use and classroom interaction in schools across many countries today.",
+    );
+    expect(r.size).toBe(1);
+  });
 });
 
 describe("sentence segments", () => {
@@ -195,6 +220,19 @@ describe("sentence segments", () => {
     ]);
 
     expect(allSegments(segs).map((s) => s.sentenceIndex).sort((a, b) => a - b)).toEqual([7, 12]);
+  });
+
+  test("a sentence repeated on the page gets one copy per occurrence", () => {
+    const page = items(`${S1} Some unrelated words in between. ${S1}`);
+    const segs = findSentenceSegments(page, [
+      { index: 3, text: S1 },
+      { index: 9, text: S1 },
+    ]);
+
+    const [first, second] = allSegments(segs);
+    expect([first.sentenceIndex, second.sentenceIndex]).toEqual([3, 9]);
+    expect(first.to).toBeLessThanOrEqual(second.from);
+    expect(second.from).toBe(page[0].str.lastIndexOf(S1));
   });
 
   test("empty inputs yield no segments", () => {

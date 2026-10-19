@@ -102,68 +102,100 @@ export function normalizeSentence(sentence: string): string {
 }
 
 /**
+ * Where the sentence's ending can start, as a multiple of its length past the
+ * anchor. The window reaches well past the nominal length, because the span
+ * is considerably longer than the sentence wherever a citation was removed.
+ */
+const TAIL_SEARCH_FROM = 0.5;
+const TAIL_SEARCH_TO = 2.5;
+/** Extra reach for the ending, so short sentences can still span a citation. */
+const TAIL_SEARCH_PAD = 64;
+
+/** Every position `needle` occurs at in `haystack`, overlapping ones included. */
+function occurrencesOf(haystack: string, needle: string): number[] {
+  const found: number[] = [];
+  for (
+    let at = haystack.indexOf(needle);
+    at !== -1;
+    at = haystack.indexOf(needle, at + 1)
+  ) {
+    found.push(at);
+  }
+  return found;
+}
+
+/**
+ * The end of the sentence anchored at `start`, found by its closing
+ * characters, or -1 if they are not within reach.
+ */
+function findTail(norm: string, target: string, start: number): number {
+  const tail = target.slice(target.length - Math.min(TAIL_LENGTH, target.length));
+  const searchFrom = start + Math.floor(target.length * TAIL_SEARCH_FROM);
+  const searchTo = Math.min(
+    norm.length,
+    start + Math.ceil(target.length * TAIL_SEARCH_TO) + TAIL_SEARCH_PAD,
+  );
+  if (searchTo <= searchFrom) return -1;
+
+  const at = norm.slice(searchFrom, searchTo).indexOf(tail);
+  return at === -1 ? -1 : searchFrom + at + tail.length;
+}
+
+/**
  * The span of `page.norm` covered by `sentence`, or null when it cannot be
  * located confidently.
+ *
+ * `taken` holds start positions other sentences have already claimed, so a
+ * sentence that occurs twice on a page gets one copy per occurrence rather
+ * than both landing on the first.
  */
 export function findNormalizedRange(
   page: NormalizedPage,
   sentence: string,
-  { requireTail = false }: { requireTail?: boolean } = {},
+  {
+    requireTail = false,
+    taken,
+  }: { requireTail?: boolean; taken?: ReadonlySet<number> } = {},
 ): { start: number; end: number } | null {
   const target = normalizeSentence(sentence);
   if (target.length < MIN_MATCHABLE || page.norm.length === 0) return null;
+
+  const free = (at: number) => !taken?.has(at);
 
   // 0. A verbatim match needs no anchoring and is the most trustworthy result
   //    there is, whatever the sentence's length. Short captions and reference
   //    fragments - which the anchor path below rejects for lacking a
   //    distinctive head - usually land here.
-  const exact = page.norm.indexOf(target);
-  if (exact !== -1) return { start: exact, end: exact + target.length };
+  const exact = occurrencesOf(page.norm, target).find(free);
+  if (exact !== undefined) return { start: exact, end: exact + target.length };
 
-  // 1. Anchor on the opening characters, shortening until something matches.
-  let start = -1;
-  let headUsed = 0;
+  // 1. Anchor on the opening characters, shortening until something matches,
+  //    and confirm each anchor by finding the closing characters after it.
+  //    Every occurrence is tried: the first is often a decoy - a running head
+  //    or section title sharing the sentence's opening words - and the real
+  //    sentence comes later on the page.
+  let unconfirmed = -1;
 
   for (const length of HEAD_LENGTHS) {
     const head = target.slice(0, Math.min(length, target.length));
     if (head.length < MIN_MATCHABLE) break;
 
-    const at = page.norm.indexOf(head);
-    if (at !== -1) {
-      start = at;
-      headUsed = head.length;
-      break;
+    for (const start of occurrencesOf(page.norm, head).filter(free)) {
+      const end = findTail(page.norm, target, start);
+      if (end > start) return { start, end };
+
+      // A long anchor is distinctive enough to stand alone, but only once no
+      // anchor anywhere could be confirmed.
+      if (unconfirmed === -1 && head.length >= TRUSTED_HEAD) unconfirmed = start;
     }
   }
 
-  if (start === -1) return null;
+  // 2. Nothing confirmed a match. A short anchor alone is not evidence, so
+  //    fail closed rather than highlight the wrong passage.
+  if (requireTail || unconfirmed === -1) return null;
 
-  // 2. Confirm and place the end using the closing characters. The span may be
-  //    considerably longer than the sentence wherever a citation was removed,
-  //    so the window reaches well past the nominal length.
-  const tailLength = Math.min(TAIL_LENGTH, target.length);
-  const tail = target.slice(target.length - tailLength);
-  const searchFrom = start + Math.floor(target.length * 0.5);
-  const searchTo = Math.min(
-    page.norm.length,
-    start + Math.ceil(target.length * 2.5) + 64,
-  );
-
-  let end = -1;
-  if (searchTo > searchFrom) {
-    const at = page.norm.slice(searchFrom, searchTo).indexOf(tail);
-    if (at !== -1) end = searchFrom + at + tail.length;
-  }
-
-  if (end === -1) {
-    // Nothing confirmed the match. A long anchor is distinctive enough to
-    // stand alone; a short one is not, so fail closed rather than highlight
-    // the wrong passage.
-    if (requireTail || headUsed < TRUSTED_HEAD) return null;
-    end = Math.min(page.norm.length, start + target.length);
-  }
-
-  return end > start ? { start, end } : null;
+  const end = Math.min(page.norm.length, unconfirmed + target.length);
+  return end > unconfirmed ? { start: unconfirmed, end } : null;
 }
 
 /** Length of the target slices `findInsertedItems` aligns with. */
@@ -372,12 +404,15 @@ export function findSentenceSegments(
     sentenceIndex: number;
     skip: Set<number>;
   }[] = [];
+  const taken = new Set<number>();
   for (const candidate of candidates) {
     if (!candidate.text) continue;
     const range = findNormalizedRange(page, candidate.text, {
       requireTail: candidate.lookbehind,
+      taken,
     });
     if (range) {
+      taken.add(range.start);
       placed.push({
         ...range,
         sentenceIndex: candidate.index,

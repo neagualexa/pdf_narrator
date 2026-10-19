@@ -50,6 +50,61 @@ interface PdfViewerProps {
   onSentenceActivate?: (index: number) => void;
 }
 
+/** A page's sentence runs, keyed by text item index. */
+type PageSegments = Map<number, SentenceSegment[]>;
+
+interface SentencePageProps {
+  /** 1-based page number. */
+  page: number;
+  width: number;
+  /** Undefined until the page's text has arrived and been matched. */
+  segments: PageSegments | undefined;
+  onTextItems: (page: number, items: PdfTextItem[]) => void;
+  onRenderSuccess: (page: number) => void;
+  onTextLayerRendered: () => void;
+}
+
+/**
+ * One rendered page, with its located sentences wrapped in marks.
+ *
+ * Its own component so each page's text renderer depends on that page's
+ * segments alone: react-pdf lists the renderer in the effect that clears the
+ * text layer and re-runs pdf.js, so one renderer shared across pages would
+ * rebuild every mounted page whenever any page's text arrived.
+ */
+const SentencePage = React.memo(function SentencePage({
+  page,
+  width,
+  segments,
+  onTextItems,
+  onRenderSuccess,
+  onTextLayerRendered,
+}: SentencePageProps) {
+  // Deliberately independent of which sentence is playing or hovered: those
+  // are classes toggled on the live marks, since changing this callback
+  // rebuilds the whole text layer.
+  const customTextRenderer = useCallback(
+    ({ str, itemIndex }: { str: string; itemIndex: number }) =>
+      renderTextItemHtml(str, segments?.get(itemIndex)),
+    [segments],
+  );
+
+  return (
+    <Page
+      pageNumber={page}
+      width={width}
+      renderTextLayer={true}
+      renderAnnotationLayer={true}
+      onGetTextSuccess={(textContent) =>
+        onTextItems(page, (textContent?.items ?? []) as PdfTextItem[])
+      }
+      customTextRenderer={customTextRenderer}
+      onRenderSuccess={() => onRenderSuccess(page)}
+      onRenderTextLayerSuccess={onTextLayerRendered}
+    />
+  );
+});
+
 export const PdfViewer: React.FC<PdfViewerProps> = ({
   file,
   className,
@@ -205,34 +260,43 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     });
   }, []);
 
+  /** The last `segmentsByPage` result, and the sentences it was matched against. */
+  const segmentsCache = useRef<{
+    sentences: string[];
+    sentencePages: number[];
+    byPage: Map<number, PageSegments>;
+  } | null>(null);
+
   // Where every locatable sentence sits, per page then per text item. Only
   // pages that have actually rendered are in here, so the cost tracks what is
   // on screen rather than the length of the document.
+  //
+  // A page's result is reused for as long as the sentences are unchanged. Each
+  // page's text layer is rebuilt whenever its segments change identity, so
+  // recomputing every page when one more arrives would rebuild them all.
   const segmentsByPage = useMemo(() => {
-    const byPage = new Map<number, Map<number, SentenceSegment[]>>();
+    const previous = segmentsCache.current;
+    const reusable =
+      previous?.sentences === sentences &&
+      previous?.sentencePages === sentencePages
+        ? previous.byPage
+        : undefined;
+
+    const byPage = new Map<number, PageSegments>();
     textItemsByPage.forEach((items, page) => {
-      const candidates = candidatesForPage(sentences, sentencePages, page);
-      byPage.set(page, findSentenceSegments(items, candidates));
+      byPage.set(
+        page,
+        reusable?.get(page) ??
+          findSentenceSegments(
+            items,
+            candidatesForPage(sentences, sentencePages, page),
+          ),
+      );
     });
+
+    segmentsCache.current = { sentences, sentencePages, byPage };
     return byPage;
   }, [textItemsByPage, sentences, sentencePages]);
-
-  // Deliberately independent of which sentence is playing or hovered:
-  // react-pdf lists this callback in the effect that renders the text layer,
-  // and that effect clears the layer and re-runs pdf.js from scratch. Anything
-  // transient is a class toggled on the marks below instead.
-  const customTextRenderer = useCallback(
-    ({
-      str,
-      itemIndex,
-      pageNumber: page,
-    }: {
-      str: string;
-      itemIndex: number;
-      pageNumber: number;
-    }) => renderTextItemHtml(str, segmentsByPage.get(page)?.get(itemIndex)),
-    [segmentsByPage],
-  );
 
   // Must be stable: react-pdf wraps this prop in a callback that its render
   // effect depends on, so a fresh arrow would rebuild the layer every render.
@@ -240,22 +304,39 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     setTextLayerVersion((version) => version + 1);
   }, []);
 
-  /** Moves the hover class, which is plain DOM work - no re-render, no relayout. */
-  const setHoveredSentence = useCallback((index: number | null) => {
+  /**
+   * Puts the hover class on exactly the marks of `index`. Clears by class
+   * rather than by the previously hovered index, so no mark is left tinted
+   * whatever happened to the layer in between.
+   */
+  const paintHover = useCallback((index: number | null) => {
     const root = pageAreaRef.current;
-    if (!root || hoveredRef.current === index) return;
+    if (!root) return;
 
-    const paint = (target: number | null, on: boolean) => {
-      if (target === null) return;
-      root
-        .querySelectorAll(`mark[data-sentence-index="${target}"]`)
-        .forEach((node) => node.classList.toggle("pdf-sentence-hover", on));
-    };
-
-    paint(hoveredRef.current, false);
-    paint(index, true);
-    hoveredRef.current = index;
+    root
+      .querySelectorAll(".pdf-sentence-hover")
+      .forEach((node) => node.classList.remove("pdf-sentence-hover"));
+    if (index === null) return;
+    root
+      .querySelectorAll(`mark[data-sentence-index="${index}"]`)
+      .forEach((node) => node.classList.add("pdf-sentence-hover"));
   }, []);
+
+  /** Moves the hover class, which is plain DOM work - no re-render, no relayout. */
+  const setHoveredSentence = useCallback(
+    (index: number | null) => {
+      if (hoveredRef.current === index) return;
+      hoveredRef.current = index;
+      paintHover(index);
+    },
+    [paintHover],
+  );
+
+  // A text layer rebuild wipes its marks' classes, so repaint the hover onto
+  // the new ones - the pointer is still resting on that sentence.
+  useEffect(() => {
+    paintHover(hoveredRef.current);
+  }, [textLayerVersion, paintHover]);
 
   /** The sentence index under a pointer event, or null if it missed the text. */
   const sentenceIndexAt = (event: React.MouseEvent): number | null => {
@@ -272,10 +353,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // that build starts by clearing the classes this added.
   useEffect(() => {
     const root = pageAreaRef.current;
-    if (!root) return;
-
-    hoveredRef.current = null;
-    if (activeSentenceIndex == null) return;
+    if (!root || activeSentenceIndex == null) return;
 
     const nodes = root.querySelectorAll(
       `mark[data-sentence-index="${activeSentenceIndex}"]`,
@@ -894,20 +972,13 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                           transformOrigin: "0 0",
                         }}
                       >
-                        <Page
-                          pageNumber={page}
+                        <SentencePage
+                          page={page}
                           width={renderWidth}
-                          renderTextLayer={true}
-                          renderAnnotationLayer={true}
-                          onGetTextSuccess={(textContent) =>
-                            handleTextItems(
-                              page,
-                              (textContent?.items ?? []) as PdfTextItem[],
-                            )
-                          }
-                          customTextRenderer={customTextRenderer}
-                          onRenderSuccess={() => removeSnapshot(page)}
-                          onRenderTextLayerSuccess={handleTextLayerRendered}
+                          segments={segmentsByPage.get(page)}
+                          onTextItems={handleTextItems}
+                          onRenderSuccess={removeSnapshot}
+                          onTextLayerRendered={handleTextLayerRendered}
                         />
                       </div>
                     )}
