@@ -3,7 +3,7 @@
  * per-item runs the text layer is rendered from.
  */
 
-import { findInsertedItems, findNormalizedRange } from "./match";
+import { findNormalizedRange } from "./match";
 import { normalizePage, normalizeSentence, PdfTextItem } from "./normalize";
 
 export interface SentenceCandidate {
@@ -89,8 +89,73 @@ export interface PageContext {
   after?: PdfTextItem[];
 }
 
+/** A place in the text: an item, and an offset within its `str`. */
+interface TextPosition {
+  item: number;
+  offset: number;
+}
+
+/**
+ * Text set at most this fraction of a sentence's own size is not part of it:
+ * running heads, footers, page numbers and note marks.
+ */
+const SMALL_TEXT_RATIO = 0.85;
+
+// Built at runtime: TypeScript rejects a /u literal for an ES5 target.
+const LETTER = new RegExp("\\p{L}", "u");
+
+const CLOSERS = `)\\]}"'\u201d\u2019\u00bb,;:`;
+/**
+ * What may follow a sentence's last word and still belong to it: closing
+ * punctuation, the citations the splitter deletes ("(Trninic, 2018)", "[3]",
+ * as in sentence_splitter.py), and the full stop.
+ */
+const ENDING_RE = new RegExp(
+  `^[${CLOSERS}]*` +
+    `(?:\\s*(?:\\([^()]*\\b(?:19|20)\\d{2}\\b[^()]*\\)|\\[\\s*\\d+(?:\\s*[-,]\\s*\\d+)*\\s*\\]))*` +
+    `[${CLOSERS}]*(?:\\s*[.!?][${CLOSERS}]*)*`,
+);
+/** How far past a sentence's last word its ending is looked for. */
+const ENDING_LOOKAHEAD = 240;
+
+function fontSize(item: PdfTextItem): number | undefined {
+  const t = item.transform;
+  return t ? Math.hypot(t[2], t[3]) || undefined : undefined;
+}
+
+/**
+ * Where a sentence really ends, given where its last word does: past what
+ * ENDING_RE allows to follow it, but never beyond `limit`, where the next
+ * sentence starts.
+ */
+function extendOverEnding(
+  items: PdfTextItem[],
+  end: TextPosition,
+  limit: TextPosition,
+): TextPosition {
+  let text = "";
+  const places: TextPosition[] = [];
+  for (let item = end.item; item <= limit.item && text.length < ENDING_LOOKAHEAD; item += 1) {
+    const str = items[item].str ?? "";
+    const to = item === limit.item ? limit.offset : str.length;
+    for (let offset = item === end.item ? end.offset : 0; offset < to; offset += 1) {
+      text += str[offset];
+      places.push({ item, offset });
+    }
+  }
+
+  const kept = ENDING_RE.exec(text)![0].length;
+  return kept === 0 ? end : { item: places[kept - 1].item, offset: places[kept - 1].offset + 1 };
+}
+
 /**
  * Every locatable sentence on the page, as per-item character runs.
+ *
+ * Each sentence is one continuous stretch, from its first word to its final
+ * punctuation - spaces, punctuation and citations between included, so it
+ * reads as a single highlight. The one exception is text set smaller than
+ * the sentence that contains letters - a running head, a footer - which a
+ * sentence crossing a page or a column runs straight past.
  *
  * Runs within an item are sorted by `from` and never overlap, which is what
  * lets `renderTextItemHtml` emit its markup in a single pass.
@@ -108,90 +173,95 @@ export function findSentenceSegments(
   const segments = new Map<number, SentenceSegment[]>();
   if (items.length === 0 || candidates.length === 0) return segments;
 
+  const all = [...before, ...items, ...after];
   // Item indices of this page within the combined text.
   const firstItem = before.length;
   const lastItem = before.length + items.length - 1;
 
-  const page = normalizePage([...before, ...items, ...after]);
+  const page = normalizePage(all);
   if (page.norm.length === 0) return segments;
 
-  const placed: {
-    start: number;
-    end: number;
-    sentenceIndex: number;
-    skip: Set<number>;
-  }[] = [];
+  const placed: { start: number; end: number; sentenceIndex: number }[] = [];
   const taken = new Set<number>();
   for (const candidate of candidates) {
     if (!candidate.text) continue;
-    const target = normalizeSentence(candidate.text);
-    const range = findNormalizedRange(page, target, {
+    const range = findNormalizedRange(page, normalizeSentence(candidate.text), {
       requireTail: candidate.lookbehind,
       taken,
     });
     if (range) {
       taken.add(range.start);
-      placed.push({
-        ...range,
-        sentenceIndex: candidate.index,
-        skip: findInsertedItems(page, range, target),
-      });
+      placed.push({ ...range, sentenceIndex: candidate.index });
     }
   }
-
-  if (placed.length === 0) return segments;
 
   // Two sentences can claim the same characters, because a match's end is far
   // less trustworthy than its start: anchoring is on the head, while the tail
   // is hunted in a window reaching well past the nominal length (and, for a
   // trusted head with no tail found, simply extended). Overshoot therefore
-  // happens at the tail, so painting in start order lets a later sentence trim
-  // its predecessor's overlong tail and never the other way round.
+  // happens at the tail, so in start order each sentence is cut off where the
+  // next begins, and never the other way round.
   placed.sort((a, b) => a.start - b.start || a.sentenceIndex - b.sentenceIndex);
 
-  const owner = new Int32Array(page.norm.length).fill(-1);
-  for (const { start, end, sentenceIndex, skip } of placed) {
-    for (let i = start; i < end && i < owner.length; i += 1) {
-      // Skipped text sits inside this sentence's span, so it belongs to no
-      // sentence - not to a predecessor whose overlong tail reached it.
-      owner[i] = skip.has(page.itemOf[i]) ? -1 : sentenceIndex;
+  placed.forEach(({ start, end, sentenceIndex }, k) => {
+    const next = placed[k + 1];
+    const stop = Math.min(end, next ? next.start : end);
+    if (stop <= start) return;
+
+    const limit: TextPosition = next
+      ? { item: page.itemOf[next.start], offset: page.offsetOf[next.start] }
+      : { item: all.length - 1, offset: (all[all.length - 1].str ?? "").length };
+    const from: TextPosition = { item: page.itemOf[start], offset: page.offsetOf[start] };
+    const to = extendOverEnding(
+      all,
+      { item: page.itemOf[stop - 1], offset: page.endOf[stop - 1] },
+      limit,
+    );
+
+    // The sentence's own size: the one most of its letters are set in.
+    const counts = new Map<number, number>();
+    let ownSize: number | undefined;
+    for (let i = start; i < stop; i += 1) {
+      const size = fontSize(all[page.itemOf[i]]);
+      if (size === undefined) continue;
+      counts.set(size, (counts.get(size) ?? 0) + 1);
+      if (ownSize === undefined || counts.get(size)! > counts.get(ownSize)!) ownSize = size;
     }
-  }
+    const isSmall = (item: number) => {
+      const size = fontSize(all[item]);
+      return ownSize !== undefined && size !== undefined && size <= ownSize * SMALL_TEXT_RATIO;
+    };
+    const isText = (item: number) => !isSmall(item) && !!(all[item].str ?? "").trim();
 
-  // Close a run whenever the owning sentence or the item changes. `itemOf` is
-  // non-decreasing, so each item's runs are appended in increasing offset
-  // order. Offsets are the item's own, so a run covers the punctuation and
-  // spaces inside it that normalisation dropped.
-  let runStart = -1;
-  for (let i = 0; i <= owner.length; i += 1) {
-    const continues =
-      i < owner.length &&
-      runStart !== -1 &&
-      owner[i] === owner[runStart] &&
-      page.itemOf[i] === page.itemOf[runStart];
-
-    if (continues) continue;
-
-    const runItem = runStart === -1 ? -1 : page.itemOf[runStart];
-    if (
-      runStart !== -1 &&
-      owner[runStart] !== -1 &&
-      runItem >= firstItem &&
-      runItem <= lastItem
-    ) {
-      const itemIndex = runItem - firstItem;
-      const list = segments.get(itemIndex);
+    const add = (item: number) => {
       const segment: SentenceSegment = {
-        from: page.offsetOf[runStart],
-        to: page.endOf[i - 1],
-        sentenceIndex: owner[runStart],
+        from: item === from.item ? from.offset : 0,
+        to: item === to.item ? to.offset : (all[item].str ?? "").length,
+        sentenceIndex,
       };
+      if (segment.to <= segment.from) return;
+      const list = segments.get(item - firstItem);
       if (list) list.push(segment);
-      else segments.set(itemIndex, [segment]);
-    }
+      else segments.set(item - firstItem, [segment]);
+    };
 
-    runStart = i < owner.length ? i : -1;
-  }
+    // This page's share: the sentence's own text items, and whatever lies
+    // between two of them - spacing, punctuation, note marks - unless it holds
+    // a running head or footer, small text with letters in it.
+    let previous = -1;
+    for (let item = Math.max(from.item, firstItem); item <= Math.min(to.item, lastItem); item += 1) {
+      if (!isText(item)) continue;
+      if (previous !== -1) {
+        let furniture = false;
+        for (let i = previous + 1; i < item; i += 1) {
+          if (isSmall(i) && LETTER.test(all[i].str ?? "")) furniture = true;
+        }
+        for (let i = previous + 1; i < item && !furniture; i += 1) add(i);
+      }
+      add(item);
+      previous = item;
+    }
+  });
 
   return segments;
 }

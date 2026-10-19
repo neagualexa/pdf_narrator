@@ -8,16 +8,15 @@
  * search will not find it, and locating it takes several steps:
  *
  *  - `normalize`: reduce the page and the sentence to letters and digits.
- *  - `match`:     find the span of the page a sentence covers, and what inside
- *                 that span the sentence never says.
+ *  - `match`:     find the span of the page a sentence covers.
  *  - `segments`:  place every sentence of a page, resolve their overlaps and
- *                 cut the result into runs per text item.
+ *                 cut each into one continuous run per text item.
  *  - `render`:    turn one text item and its runs into text-layer markup.
  */
 
 export type { NormalizedPage, PdfTextItem } from "./normalize";
 export { normalizePage, normalizeSentence } from "./normalize";
-export { findInsertedItems, findNormalizedRange } from "./match";
+export { findNormalizedRange } from "./match";
 export type {
   PageContext,
   SentenceCandidate,

@@ -165,11 +165,16 @@ def filter_harvard_citations_and_references(text: str) -> str:
         re.compile(r'\bibid\.?\b', re.IGNORECASE),
     ]
     
+    # A citation can span a page break, and deleting the page sentinel inside
+    # it would tag every sentence up to the next page with the wrong page.
+    def keep_page_markers(match: re.Match) -> str:
+        return ' '.join(marker.group() for marker in PAGE_MARKER_RE.finditer(match.group()))
+
     # Apply all patterns
     for pattern in patterns:
         if shutdown_requested:
             break
-        text = pattern.sub('', text)
+        text = pattern.sub(keep_page_markers, text)
     
     # Clean up punctuation and formatting issues after citation removal
     # Fix double commas and spaces

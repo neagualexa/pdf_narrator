@@ -1,162 +1,113 @@
 /**
  * Locating one sentence inside a normalised page.
  *
- *  1. Anchor on the sentence's opening characters, which the splitter rarely
- *     touches, falling back to progressively shorter anchors.
- *  2. Find the sentence's closing characters after that anchor to fix the end.
- *     The matched span is allowed to be *longer* than the sentence, because
- *     deleted citations still occupy space in the PDF.
- *  3. Within that span, find what the sentence never says - a running head
- *     the sentence ran across - so it can be left unlit.
+ * The sentence is walked along the page from each place its opening occurs.
+ * Wherever the two stop agreeing, the walk resumes at the nearest place they
+ * agree again, skipping text on either side:
  *
- * What it deliberately does not do is fuzzy edit-distance matching: the anchor
- * approach is cheaper, and a wrong highlight is worse than none, so every step
- * fails closed.
+ *  - on the page, what the sentence does not say: a citation the splitter
+ *    deleted ("Smith (2010) showed"), or a page's footer and the next page's
+ *    running head when the sentence crosses a page break;
+ *  - in the sentence, what the page does not say: a vocabulary substitution
+ *    ("&" read as "and") or a word OCR misread ("difected").
  *
- * Every function here takes the sentence already normalised (`target`), so a
- * caller normalises it once for all of them.
+ * A walk that reaches the sentence's last characters with most of it lined
+ * up is a match. What it deliberately does not do is fuzzy edit-distance
+ * matching: a wrong highlight is worse than none, so it fails closed.
+ *
+ * It takes the sentence already normalised (`target`), so a caller can
+ * normalise it once.
  */
 
 import { NormalizedPage } from "./normalize";
 
 /** Below this many normalised characters a match is not distinctive enough. */
 const MIN_MATCHABLE = 12;
-
 /**
- * Anchor lengths to try, longest first. Short anchors exist because a citation
- * can sit near the *start* of a sentence ("As Krummheuer (2011) notes, ...")
- * and corrupt any longer opening.
+ * How much of the sentence's opening must appear unbroken where a walk
+ * starts: enough for "Smith" before "(2010) showed that".
  */
-const HEAD_LENGTHS = [48, 32, 24, 16, 12];
-
+const SEED = 5;
+/** Shortest stretch that counts as the sentence and page agreeing again. */
+const PIECE = 8;
 /**
- * An anchor at least this long is distinctive enough to trust on its own.
- * Anything shorter must be confirmed by finding the sentence's ending too,
- * or the match is discarded.
+ * Most page text skipped at once: a citation, or what separates a sentence
+ * crossing a page break - a footer, a running head, a figure's caption.
  */
-const TRUSTED_HEAD = 24;
-
-/** How many trailing characters are used to locate the end of the sentence. */
-const TAIL_LENGTH = 24;
-
+const MAX_PAGE_SKIP = 600;
+/** Most sentence text skipped at once: a substituted or misread word. */
+const MAX_SENTENCE_SKIP = 16;
+/** Share of the sentence that must line up for a walk to count. */
+const MIN_LINED_UP = 0.75;
 /**
- * Where the sentence's ending can start, as a multiple of its length past the
- * anchor. The window reaches well past the nominal length, because the span
- * is considerably longer than the sentence wherever a citation was removed.
+ * An opening lined up unbroken for at least this long is distinctive enough
+ * to trust when the walk cannot reach the ending - one cut off at the foot of
+ * the last page; anything shorter is no evidence.
  */
-const TAIL_SEARCH_FROM = 0.5;
-const TAIL_SEARCH_TO = 2.5;
-/** Extra reach for the ending, so short sentences can still span a citation. */
-const TAIL_SEARCH_PAD = 64;
+const TRUSTED_OPENING = 24;
 
-/** Every position `needle` occurs at in `haystack`, overlapping ones included. */
-function occurrencesOf(haystack: string, needle: string): number[] {
-  const found: number[] = [];
-  for (
-    let at = haystack.indexOf(needle);
-    at !== -1;
-    at = haystack.indexOf(needle, at + 1)
-  ) {
-    found.push(at);
-  }
-  return found;
+interface Walk {
+  /** Just past the last page character lined up. */
+  end: number;
+  /** Characters of the sentence lined up. */
+  linedUp: number;
+  /** Length of the unbroken stretch at the start. */
+  opening: number;
+  /** Whether the walk lined up the sentence's last characters. */
+  complete: boolean;
 }
 
-/** Shortest piece of a split ending that counts towards confirming it. */
-const TAIL_MIN_PIECE = 6;
-/**
- * Most text a split ending may straddle: a page's footer and the next page's
- * running head, or a citation among the last few words.
- */
-const TAIL_MAX_GAP = 240;
-
-/**
- * The end of the sentence anchored at `start`, found by its closing
- * characters, or -1 if they are not within reach.
- *
- * The closing characters may come in two pieces with other text between them
- * - "...a system of sensory" at the foot of one page and "corrections." at
- * the top of the next, with the footer and the next page's head between.
- */
-function findTail(norm: string, target: string, start: number): number {
-  const tail = target.slice(target.length - Math.min(TAIL_LENGTH, target.length));
-  const searchFrom = start + Math.floor(target.length * TAIL_SEARCH_FROM);
-  const searchTo = Math.min(
-    norm.length,
-    start + Math.ceil(target.length * TAIL_SEARCH_TO) + TAIL_SEARCH_PAD,
-  );
-  if (searchTo <= searchFrom) return -1;
-
-  const window = norm.slice(searchFrom, searchTo);
-  const at = window.indexOf(tail);
-  if (at !== -1) return searchFrom + at + tail.length;
-
-  for (let split = TAIL_MIN_PIECE; split <= tail.length - TAIL_MIN_PIECE; split += 1) {
-    const head = tail.slice(0, split);
-    const rest = tail.slice(split);
-
-    for (const found of occurrencesOf(window, head)) {
-      const gapFrom = searchFrom + found + head.length;
-      const restAt = norm
-        .slice(gapFrom, gapFrom + TAIL_MAX_GAP + rest.length)
-        .indexOf(rest);
-      if (restAt !== -1) return gapFrom + restAt + rest.length;
-    }
-  }
-  return -1;
+/** How far `norm` from `p` and `target` from `t` agree. */
+function agreement(norm: string, p: number, target: string, t: number): number {
+  let n = 0;
+  while (t + n < target.length && norm[p + n] === target[t + n]) n += 1;
+  return n;
 }
 
-/**
- * Offsets into the sentence to anchor at when its opening is interrupted. One
- * of them must land past the interruption, so they reach a few words in.
- */
-const SPLIT_ANCHOR_OFFSETS = [4, 8, 12, 16, 20, 24, 32];
-const SPLIT_ANCHOR_LENGTH = 24;
-/** Shortest stretch of the opening accepted before a split anchor. */
-const SPLIT_MIN_OPENING = 4;
-/** How much text - a citation - may sit between the opening and the anchor. */
-const SPLIT_MAX_GAP = 48;
+/** Walks `target` along `norm`, its first character at `start`. */
+function walk(norm: string, target: string, start: number): Walk {
+  let p = start;
+  let t = 0;
+  let linedUp = 0;
+  let opening = -1;
 
-/**
- * The span of a sentence whose opening is interrupted in the page, or null.
- *
- * Anchors on a stretch a few characters into the sentence, then looks just
- * before it for as much of the sentence's opening as is there unbroken
- * ("smith" ahead of "1910showedthatchildren..."). Short as that opening may
- * be, the result needs the anchor, the opening and the ending all to line up.
- */
-function findSplitOpening(
-  norm: string,
-  target: string,
-  free: (at: number) => boolean,
-): { start: number; end: number } | null {
-  for (const offset of SPLIT_ANCHOR_OFFSETS) {
-    if (offset + SPLIT_ANCHOR_LENGTH > target.length) break;
-    const anchor = target.slice(offset, offset + SPLIT_ANCHOR_LENGTH);
+  for (;;) {
+    const run = agreement(norm, p, target, t);
+    p += run;
+    t += run;
+    linedUp += run;
+    if (opening === -1) opening = run;
+    if (t === target.length) return { end: p, linedUp, opening, complete: true };
 
-    for (const at of occurrencesOf(norm, anchor)) {
-      const reach = norm.slice(Math.max(0, at - offset - SPLIT_MAX_GAP), at);
-
-      // The longest opening wins: it is the most distinctive, and the last
-      // occurrence is the one nearest the anchor.
-      for (let length = offset; length >= SPLIT_MIN_OPENING; length -= 1) {
-        const found = reach.lastIndexOf(target.slice(0, length));
-        if (found === -1) continue;
-
-        const start = at - reach.length + found;
-        const end = free(start) ? findTail(norm, target, start) : -1;
-        if (end > at) return { start, end };
-        break;
-      }
+    // Resume where the two agree longest from then on. Neither skipping the
+    // least nor resuming nearest will do: either can land on a later word that
+    // merely recurs nearby ("whole-class scaffolding" for "computer-based
+    // scaffolding"), where the agreement soon runs out again.
+    const ahead = norm.slice(p, p + MAX_PAGE_SKIP + PIECE);
+    let best = { run: 0, at: 0, skip: 0 };
+    for (let skip = 0; skip <= MAX_SENTENCE_SKIP; skip += 1) {
+      // The sentence's last piece may be short of a full one.
+      const piece = target.substr(t + skip, PIECE);
+      if (piece.length < SEED) break;
+      const at = ahead.indexOf(piece);
+      if (at === -1) continue;
+      const resumed = agreement(norm, p + at, target, t + skip);
+      if (resumed > best.run) best = { run: resumed, at, skip };
     }
+    if (best.run === 0) return { end: p, linedUp, opening, complete: false };
+    p += best.at;
+    t += best.skip;
   }
-  return null;
 }
 
 /**
  * The span of `page.norm` covered by the normalised sentence `target`, or
  * null when it cannot be located confidently.
  *
+ * Of the walks that match, the one lining up most of the sentence wins, and
+ * then the tightest: the opening's first occurrence is often a decoy - a
+ * running head or section title sharing the sentence's opening words - whose
+ * walk only reaches the sentence by skipping a long way.
  * `taken` holds start positions other sentences have already claimed, so a
  * sentence that occurs twice on a page gets one copy per occurrence rather
  * than both landing on the first.
@@ -169,152 +120,37 @@ export function findNormalizedRange(
     taken,
   }: { requireTail?: boolean; taken?: ReadonlySet<number> } = {},
 ): { start: number; end: number } | null {
-  if (target.length < MIN_MATCHABLE || page.norm.length === 0) return null;
+  const { norm } = page;
+  if (target.length < MIN_MATCHABLE || norm.length === 0) return null;
 
-  const free = (at: number) => !taken?.has(at);
+  let best: { start: number; end: number; linedUp: number } | null = null;
+  let unconfirmed = { start: -1, opening: TRUSTED_OPENING - 1 };
 
-  // 0. A verbatim match needs no anchoring and is the most trustworthy result
-  //    there is, whatever the sentence's length. Short captions and reference
-  //    fragments - which the anchor path below rejects for lacking a
-  //    distinctive head - usually land here.
-  const exact = occurrencesOf(page.norm, target).find(free);
-  if (exact !== undefined) return { start: exact, end: exact + target.length };
+  const opening = target.slice(0, SEED);
+  for (let start = norm.indexOf(opening); start !== -1; start = norm.indexOf(opening, start + 1)) {
+    if (taken?.has(start)) continue;
 
-  // 1. Anchor on the opening characters, shortening until something matches,
-  //    and confirm each anchor by finding the closing characters after it.
-  //    Every occurrence is tried: the first is often a decoy - a running head
-  //    or section title sharing the sentence's opening words - and the real
-  //    sentence comes later on the page.
-  let unconfirmed = -1;
-
-  for (const length of HEAD_LENGTHS) {
-    const head = target.slice(0, Math.min(length, target.length));
-    if (head.length < MIN_MATCHABLE) break;
-
-    for (const start of occurrencesOf(page.norm, head).filter(free)) {
-      const end = findTail(page.norm, target, start);
-      if (end > start) return { start, end };
-
-      // A long anchor is distinctive enough to stand alone, but only once no
-      // anchor anywhere could be confirmed.
-      if (unconfirmed === -1 && head.length >= TRUSTED_HEAD) unconfirmed = start;
+    const { end, linedUp, opening: unbroken, complete } = walk(norm, target, start);
+    if (complete && linedUp >= target.length * MIN_LINED_UP) {
+      if (
+        !best ||
+        linedUp > best.linedUp ||
+        (linedUp === best.linedUp && end - start < best.end - best.start)
+      ) {
+        best = { start, end, linedUp };
+      }
+    } else if (unbroken > unconfirmed.opening) {
+      unconfirmed = { start, opening: unbroken };
     }
   }
 
-  // 2. A citation straight after the first word or two ("Smith (2010) showed
-  //    that ...") breaks every opening above. Anchor past it instead, and
-  //    find the opening just before.
-  const split = findSplitOpening(page.norm, target, free);
-  if (split) return split;
+  if (best) return { start: best.start, end: best.end };
 
-  // 3. Nothing confirmed a match. A short anchor alone is not evidence, so
-  //    fail closed rather than highlight the wrong passage.
-  if (requireTail || unconfirmed === -1) return null;
-
-  const end = Math.min(page.norm.length, unconfirmed + target.length);
-  return end > unconfirmed ? { start: unconfirmed, end } : null;
-}
-
-/** Length of the target slices `findInsertedItems` aligns with. */
-const ALIGN_CHUNK = 6;
-/** Furthest an aligned slice may sit past the last one: the longest insertion bridged. */
-const ALIGN_MAX_GAP = 240;
-/** Extra page characters a gap may hold over the sentence's before it counts as inserted. */
-const ALIGN_SLACK = 3;
-/**
- * Share of a gap's slices that must be absent from the sentence. Greedy
- * alignment can jump ahead over words the sentence does say, when the backend
- * read them in a different order; those words are still found in the sentence.
- */
-const INSERTED_SHARE = 0.6;
-
-/**
- * Text items inside a matched span that the sentence does not contain at all.
- *
- * A span is contiguous in the page's text, but the sentence need not be: one
- * that runs from the foot of one column to the head of the next has the next
- * column's running head and page number in the middle of it ("...the proposed
- * ALTERNATIVE PATTERNS OF COMMUNICATION 169 changes..."). The narrator never
- * says those, so they should not light up with the sentence either.
- *
- * The sentence is walked through the span in short slices. Wherever the page
- * holds clearly more text between two aligned slices than the sentence does,
- * that text was inserted; a gap about the size of the sentence's own is just
- * OCR misreading a word, and stays. A gap must also be mostly text the
- * sentence does not contain anywhere, so a misalignment over words that are
- * spoken - just read in another order - cannot punch a hole in the sentence.
- * Only items lying wholly inside an insertion are reported, so a citation
- * sharing an item with the sentence's own words keeps its highlight rather
- * than leaving a hole mid-line.
- */
-export function findInsertedItems(
-  page: NormalizedPage,
-  range: { start: number; end: number },
-  target: string,
-): Set<number> {
-  const inserted = new Set<number>();
-  const { norm, itemOf } = page;
-
-  // Aligned stretches, as [pageStart, targetStart, length].
-  const aligned: [number, number, number][] = [];
-  let p = range.start;
-  let t = 0;
-  while (t + ALIGN_CHUNK <= target.length && p < range.end) {
-    const at = norm.indexOf(target.slice(t, t + ALIGN_CHUNK), p);
-    if (at === -1 || at + ALIGN_CHUNK > range.end || at - p > ALIGN_MAX_GAP) {
-      t += 1;
-      continue;
-    }
-    let length = ALIGN_CHUNK;
-    while (
-      at + length < range.end &&
-      t + length < target.length &&
-      norm[at + length] === target[t + length]
-    ) {
-      length += 1;
-    }
-    aligned.push([at, t, length]);
-    p = at + length;
-    t += length;
-  }
-
-  // Too little lined up to tell an insertion from a misread: change nothing.
-  const matched = aligned.reduce((sum, [, , length]) => sum + length, 0);
-  if (matched < target.length * 0.5) return inserted;
-
-  const candidates = new Set<number>();
-  const markGap = (from: number, to: number) => {
-    // Slice the gap the same way the sentence was aligned, and see how much of
-    // it the sentence says anywhere at all.
-    let pieces = 0;
-    let foreign = 0;
-    for (let i = from; i + ALIGN_CHUNK <= to; i += ALIGN_CHUNK) {
-      pieces += 1;
-      if (!target.includes(norm.slice(i, i + ALIGN_CHUNK))) foreign += 1;
-    }
-    if (pieces === 0 || foreign < pieces * INSERTED_SHARE) return;
-    for (let i = from; i < to; i += 1) candidates.add(itemOf[i]);
-  };
-
-  for (let k = 1; k < aligned.length; k += 1) {
-    const [prevPage, prevTarget, prevLength] = aligned[k - 1];
-    const [nextPage, nextTarget] = aligned[k];
-    const pageGap = nextPage - (prevPage + prevLength);
-    const targetGap = nextTarget - (prevTarget + prevLength);
-    if (pageGap > targetGap + ALIGN_SLACK) {
-      markGap(prevPage + prevLength, nextPage);
-    }
-  }
-
-  // An item counts only if none of its characters were aligned with the
-  // sentence - every character of it in the span must lie inside a gap.
-  const alignedItems = new Set<number>();
-  for (const [at, , length] of aligned) {
-    for (let i = at; i < at + length; i += 1) alignedItems.add(itemOf[i]);
-  }
-  candidates.forEach((item) => {
-    if (!alignedItems.has(item)) inserted.add(item);
-  });
-
-  return inserted;
+  // No walk reached the ending. The longest unbroken opening may stand alone
+  // if it is long enough - the ending can be cut off at the foot of the last
+  // page - but a short one is no evidence, so fail closed rather than
+  // highlight the wrong passage.
+  const { start } = unconfirmed;
+  if (requireTail || start === -1) return null;
+  return { start, end: Math.min(norm.length, start + target.length) };
 }

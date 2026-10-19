@@ -11,6 +11,12 @@ import {
 
 const items = (...strs: string[]) => strs.map((str) => ({ str }));
 
+/** An item set in `size`-point type, as pdf.js reports it. */
+const sized = (size: number, str: string): PdfTextItem => ({ str, transform: [size, 0, 0, size, 0, 0] });
+/** Body text, and the smaller type of running heads, footers and note marks. */
+const body = (...strs: string[]) => strs.map((str) => sized(10, str));
+const small = (str: string) => sized(7.5, str);
+
 /** Every segment on a page, in item then offset order. */
 const allSegments = (segs: Map<number, SentenceSegment[]>): SentenceSegment[] => {
   const out: SentenceSegment[] = [];
@@ -141,7 +147,7 @@ describe("anchor robustness", () => {
     );
     const r = highlightRanges(page, "Smith showed that children learn best through guided participation with peers.");
     const [start, end] = r.get(0)!;
-    expect(page[0].str.slice(start, end)).toMatch(/^Smith \(2010\) showed.*peers$/);
+    expect(page[0].str.slice(start, end)).toMatch(/^Smith \(2010\) showed.*peers\.$/);
   });
 
   test("a citation a few words in, after a sentence split mid-reference", () => {
@@ -150,7 +156,7 @@ describe("anchor robustness", () => {
     );
     const r = highlightRanges(page, "and in Bruner, appears to be a detailed and wellelaborated synthesis of these ideas.");
     const [start, end] = r.get(0)!;
-    expect(page[0].str.slice(start, end)).toMatch(/^and in Bruner \(1975a, 1975b\), appears.*ideas$/);
+    expect(page[0].str.slice(start, end)).toMatch(/^and in Bruner \(1975a, 1975b\), appears.*ideas\.$/);
   });
 
   test("an interrupted opening still needs its ending", () => {
@@ -278,20 +284,66 @@ describe("sentence segments", () => {
   });
 });
 
-describe("text inserted into a sentence", () => {
-  test("a running head between two columns is not part of the sentence", () => {
-    const page = items(
-      "In addition, the proposed",
-      "ALTERNATIVE PATTERNS OF COMMUNICATION",
-      "169",
-      "changes currently advocated for reform in mathematics education sup-",
-      "port a more dialogic view of communication (NCTM 1989, 1991).",
+describe("one continuous highlight per sentence", () => {
+  /** The text each segment covers, in page order. */
+  const covered = (page: PdfTextItem[], segs: Map<number, SentenceSegment[]>) =>
+    Array.from(segs.keys())
+      .sort((a, b) => a - b)
+      .map((key) => segs.get(key)!.map(({ from, to }) => page[key].str.slice(from, to)).join("|"));
+
+  test("spaces and punctuation set as items of their own are covered", () => {
+    const page = body("We look at the teacher", "\u2019", "s role as", " ", "inter", "subjective scaffolding in class.");
+    const sentence = "We look at the teacher's role as intersubjective scaffolding in class.";
+    const segs = findSentenceSegments(page, [{ index: 0, text: sentence }]);
+    expect(covered(page, segs)).toEqual(page.map((item) => item.str));
+  });
+
+  test("a citation deleted from the end is covered, with the full stop", () => {
+    const page = body(
+      "the practice establishes some regulative pattern that only later surfaces for the student as an",
+      "articulated strategy (Trninic, 2018). The process of transfer begins.",
     );
+    const sentence =
+      "the practice establishes some regulative pattern that only later surfaces for the student as an articulated strategy.";
+    const segs = findSentenceSegments(page, [{ index: 0, text: sentence }]);
+    expect(covered(page, segs)[1]).toBe("articulated strategy (Trninic, 2018).");
+  });
+
+  test("a bracket that is not a deleted citation stays out", () => {
+    const page = body("The learner may become aware of her own system of regulation over time. (This matters.)");
+    const sentence = "The learner may become aware of her own system of regulation over time.";
+    const segs = findSentenceSegments(page, [{ index: 0, text: sentence }]);
+    expect(covered(page, segs)).toEqual(["The learner may become aware of her own system of regulation over time."]);
+  });
+
+  test("a note mark inside the sentence is covered, not a hole", () => {
+    const page = [
+      ...body("only after sufficient repetitions without repetitions"),
+      small("18"),
+      small(" "),
+      ...body("(Bernstein, 1996, p. 204) in cooperation with the teacher."),
+    ];
+    const sentence = "only after sufficient repetitions without repetitions in cooperation with the teacher.";
+    const segs = findSentenceSegments(page, [{ index: 0, text: sentence }]);
+    expect(Array.from(segs.keys()).sort()).toEqual([0, 1, 2, 3]);
+  });
+
+  test("a running head between two columns is not part of the sentence", () => {
+    const page = [
+      ...body("In addition, the proposed"),
+      small("ALTERNATIVE PATTERNS OF COMMUNICATION"),
+      small("169"),
+      ...body(
+        "changes currently advocated for reform in mathematics education sup-",
+        "port a more dialogic view of communication (NCTM 1989, 1991).",
+      ),
+    ];
     const sentence =
       "In addition, the proposed changes currently advocated for reform in mathematics education support a more dialogic view of communication.";
     const segs = findSentenceSegments(page, [{ index: 7, text: sentence }]);
 
     expect(Array.from(segs.keys()).sort()).toEqual([0, 3, 4]);
+    expect(covered(page, segs)[2]).toBe("port a more dialogic view of communication (NCTM 1989, 1991).");
   });
 
   test("an OCR misread inside the sentence keeps its item highlighted", () => {
@@ -304,14 +356,6 @@ describe("text inserted into a sentence", () => {
     const segs = findSentenceSegments(page, [{ index: 0, text: sentence }]);
 
     expect(Array.from(segs.keys()).sort()).toEqual([0, 1, 2]);
-  });
-
-  test("a citation sharing an item with the sentence keeps its highlight", () => {
-    const page = items("Wertsch and Toma (1995) characterize communication in classrooms as univocal.");
-    const sentence = "Wertsch and Toma characterize communication in classrooms as univocal.";
-    const segs = findSentenceSegments(page, [{ index: 0, text: sentence }]);
-
-    expect(segs.get(0)).toHaveLength(1);
   });
 });
 
@@ -398,20 +442,24 @@ describe("sentences crossing a page break", () => {
   // them the page's footer, and page 12 opens with its own head.
   const sentence =
     "Later, they met in Liege in July 1971; these meetings happened at the time when both of them were studying children's abilities at an early age.";
-  const page11 = items(
-    "the development of skilled movement in infancy and about Bernstein's research. ",
-    "Later, they met in",
-    "MIND, CULTURE, AND ACTIVITY",
-    "13",
-  );
-  const page12 = items(
-    "14",
-    "A. SHVARTS AND A. BAKKER",
-    "Liege in July 1971; these meetings happened at the time when both of them were studying children's",
-    "abilities at an early age.",
-    "14",
-    "From the Luria-Bruner correspondence, we know that their discussions influenced Bruner's writing.",
-  );
+  const page11 = [
+    ...body(
+      "the development of skilled movement in infancy and about Bernstein's research. ",
+      "Later, they met in",
+    ),
+    small("MIND, CULTURE, AND ACTIVITY"),
+    small("13"),
+  ];
+  const page12 = [
+    small("14"),
+    small("A. SHVARTS AND A. BAKKER"),
+    ...body(
+      "Liege in July 1971; these meetings happened at the time when both of them were studying children's",
+      "abilities at an early age.",
+    ),
+    sized(6.7, "14"),
+    ...body("From the Luria-Bruner correspondence, we know that their discussions influenced Bruner's writing."),
+  ];
   const owned = (segs: Map<number, SentenceSegment[]>) =>
     Array.from(segs.keys()).sort((a, b) => a - b);
 
@@ -430,17 +478,19 @@ describe("sentences crossing a page break", () => {
   test("a sentence whose ending straddles the page break lights up on both pages", () => {
     const spilling =
       "We look at the teacher's role as establishing conditions in which the learner may sense the required future state and creatively constitute her own system of action control and a system of sensory corrections.";
-    const end15 = items(
-      "We look at the teacher's role as establishing conditions in which the learner may sense the required",
-      "future state and creatively constitute her own system of action control and a system of sensory",
-      "MIND, CULTURE, AND ACTIVITY",
-      "15",
-    );
-    const start16 = items(
-      "16",
-      "A. SHVARTS AND A. BAKKER",
-      "corrections. Moreover, in some cases, the learner may became aware of her own system of regulation",
-    );
+    const end15 = [
+      ...body(
+        "We look at the teacher's role as establishing conditions in which the learner may sense the required",
+        "future state and creatively constitute her own system of action control and a system of sensory",
+      ),
+      small("MIND, CULTURE, AND ACTIVITY"),
+      small("15"),
+    ];
+    const start16 = [
+      small("16"),
+      small("A. SHVARTS AND A. BAKKER"),
+      ...body("corrections. Moreover, in some cases, the learner may became aware of her own system of regulation"),
+    ];
 
     const onFirst = findSentenceSegments(end15, [{ index: 0, text: spilling }], { after: start16 });
     expect(owned(onFirst)).toEqual([0, 1]);
@@ -452,7 +502,7 @@ describe("sentences crossing a page break", () => {
     );
     expect(owned(onSecond)).toEqual([2]);
     const [{ from, to }] = onSecond.get(2)!;
-    expect(start16[2].str.slice(from, to)).toBe("corrections");
+    expect(start16[2].str.slice(from, to)).toBe("corrections.");
   });
 
   test("its rest lights up overleaf, without the running head", () => {
@@ -469,7 +519,7 @@ describe("text beyond ASCII", () => {
   test("ligatures in the PDF match the plain letters in the sentence", () => {
     const page = items("The classiﬁcation of ﬁnite groups was eventually completed.");
     const r = highlightRanges(page, "The classification of finite groups was eventually completed.");
-    expect(r.get(0)).toEqual([0, page[0].str.length - 1]);
+    expect(r.get(0)).toEqual([0, page[0].str.length]);
   });
 
   test("accents match whether or not the sentence kept them", () => {
@@ -479,7 +529,7 @@ describe("text beyond ASCII", () => {
 
   test("non-Latin scripts are matched", () => {
     const s = "Η γλώσσα είναι ένα σύστημα επικοινωνίας μεταξύ ανθρώπων.";
-    expect(highlightRanges(items(s), s).get(0)).toEqual([0, s.length - 1]);
+    expect(highlightRanges(items(s), s).get(0)).toEqual([0, s.length]);
   });
 
   test("a character whose lowercase is longer does not shift later offsets", () => {
@@ -490,7 +540,7 @@ describe("text beyond ASCII", () => {
       { index: 1, text: "Ankara is the capital of the country." },
     ]);
     const [{ from, to }] = segs.get(0)!;
-    expect(str.slice(from, to)).toBe("Ankara is the capital of the country");
+    expect(str.slice(from, to)).toBe("Ankara is the capital of the country.");
   });
 
   test("normalizePage spans a surrogate pair as one character", () => {

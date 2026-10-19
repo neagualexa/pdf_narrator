@@ -235,7 +235,10 @@ export function renderTextContent(
 
   return Array.from(byAngle.values())
     .sort((p, q) => q.length - p.length)
-    .flatMap((group) => splitColumns(group).map(renderRuns))
+    .flatMap((group) => {
+      const body = dominantSize(group);
+      return splitColumns(group).map((block) => renderRuns(block, body));
+    })
     .filter(Boolean)
     .join(BLOCK_BREAK);
 }
@@ -414,11 +417,58 @@ function splitColumns(runs: Run[], depth = 0): Run[][] {
   return blocks.filter((block) => block.length > 0);
 }
 
-/** Lay out runs that all share one orientation. */
-function renderRuns(runs: Run[]): string {
+/** The size most of the runs' text is set in. */
+function dominantSize(runs: Run[]): number {
+  const chars = new Map<number, number>();
+  let best = 0;
+  for (const run of runs) {
+    const size = Math.round(run.size * 10) / 10;
+    chars.set(size, (chars.get(size) ?? 0) + run.str.length);
+    if (chars.get(size)! > (chars.get(best) ?? 0)) best = size;
+  }
+  return best;
+}
+
+/** A figure's or table's caption: "Figure 2.", "Fig. 3", "Table 1". */
+const CAPTION_RE = /^\s*(?:fig(?:ure)?\.?|table)\s*\d+/i;
+/** Text set below this fraction of the body size is not body text. */
+const SMALL_TEXT_RATIO = 0.98;
+
+/**
+ * Drops figures and tables: their captions, a table's cells, the labels
+ * inside a figure. None reads as part of the text, and a table read line by
+ * line across its columns is word salad.
+ *
+ * A float is found by its caption - a line starting "Figure 2." or "Table 1"
+ * set smaller than the body - and runs from there both ways through every
+ * adjacent line also set smaller than the body: a table's rows below its
+ * caption, a figure's labels above its caption and the caption's own
+ * continuation below. It stops at the first line set at body size or larger,
+ * so a heading after a figure stays, as does a block quote, which is small
+ * but has no caption.
+ */
+function dropFloats(lines: Run[][], body: number): Run[][] {
+  const isSmall = (line: Run[]) => dominantSize(line) < body * SMALL_TEXT_RATIO;
+  const dropped = new Set<number>();
+
+  lines.forEach((line, i) => {
+    if (!isSmall(line) || !CAPTION_RE.test(joinLine(line))) return;
+    for (let j = i; j >= 0 && isSmall(lines[j]); j -= 1) dropped.add(j);
+    for (let j = i + 1; j < lines.length && isSmall(lines[j]); j += 1) dropped.add(j);
+  });
+
+  return lines.filter((_, i) => !dropped.has(i));
+}
+
+/**
+ * Lay out runs that all share one orientation. `body` is the page's body
+ * text size, which a single column of it may not be dominated by.
+ */
+function renderRuns(runs: Run[], body: number): string {
   if (runs.length === 0) return "";
 
-  const lines = groupIntoLines(runs);
+  const lines = dropFloats(groupIntoLines(runs), body);
+  if (lines.length === 0) return "";
   const baselines = lines.map(
     (line) => line.reduce((sum, r) => sum + r.y, 0) / line.length
   );

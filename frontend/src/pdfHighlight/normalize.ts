@@ -10,6 +10,8 @@
 
 export interface PdfTextItem {
   str: string;
+  /** pdf.js's text matrix; its vertical scale is the font size. */
+  transform?: number[];
 }
 
 export interface NormalizedPage {

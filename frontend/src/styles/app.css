@@ -1091,11 +1091,13 @@ body.is-resizing {
    hovered and Alt+clicked. The wrapper has to be a <mark>, not a <span>:
    pdf.js absolutely positions every span inside the text layer, which would
    tear a nested one out of its line. Invisible until hovered, and transparent
-   for the same reason the highlight below is. */
+   for the same reason the highlight below is. Square-cornered and unoutlined:
+   a sentence is one mark per text item, and anything drawn around each mark
+   would show a seam wherever one item meets the next. */
 .react-pdf__Page__textContent mark.pdf-sentence {
   background-color: transparent;
   color: transparent;
-  border-radius: 2px;
+  border-radius: 0;
   padding: 0;
 }
 
@@ -1126,9 +1128,6 @@ body.is-resizing {
 .react-pdf__Page__textContent mark.pdf-sentence--active {
   background-color: rgba(16, 185, 129, 0.3);
   color: transparent;
-  border-radius: 2px;
-  padding: 0;
-  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.35);
 }
 
 /* Drag-and-drop - shown only while a file is over the window. pointer-events
