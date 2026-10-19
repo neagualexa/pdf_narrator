@@ -1,10 +1,12 @@
+import { pathToFileURL } from "url";
+
 /**
- * Layout-aware text extraction for pdf-parse / pdf.js pages.
+ * Layout-aware text extraction for pdf.js pages.
  *
  * pdf.js hands us positioned text runs, not words: a scanned-then-OCRed PDF
  * typically emits one run per word with no space characters anywhere, and with
  * a baseline that jitters by a few points across a single visual line. Simply
- * concatenating `item.str` (pdf-parse's default) therefore glues words
+ * concatenating `item.str`, as a plain text dump does, therefore glues words
  * together ("providegrounds"), and starting a new line whenever the baseline
  * changes shatters every line into fragments.
  *
@@ -210,20 +212,15 @@ function isInView(item: TextItem, view?: number[]): boolean {
   );
 }
 
-/**
- * Reconstruct a page's text from its pdf.js text content.
- */
-export function renderTextContent(
-  textContent: { items: TextItem[] },
-  view?: number[]
-): string {
-  const runs = dropNoteMarks(
-    textContent.items
-      .filter((item) => isInView(item, view))
-      .map(toRun)
-      .filter((run): run is Run => run !== null)
-  );
+/** A page's runs, as `readPage` collects them for `renderPages`. */
+export type PageRuns = Run[];
 
+/**
+ * Reconstruct each page's text from its runs. `body` is the size the
+ * document's body text is set in: measured over the whole document, since a
+ * page given over to a table is mostly set in the table's size.
+ */
+function renderPageRuns(runs: Run[], body: number): string {
   // Coordinates from different frames cannot be compared, so each orientation
   // is laid out on its own - the body first, then any sideways margin text.
   const byAngle = new Map<number, Run[]>();
@@ -235,10 +232,7 @@ export function renderTextContent(
 
   return Array.from(byAngle.values())
     .sort((p, q) => q.length - p.length)
-    .flatMap((group) => {
-      const body = dominantSize(group);
-      return splitColumns(group).map((block) => renderRuns(block, body));
-    })
+    .flatMap((group) => splitColumns(group).map((block) => renderRuns(block, body)))
     .filter(Boolean)
     .join(BLOCK_BREAK);
 }
@@ -326,7 +320,7 @@ function findGutter(lines: Run[][]): { from: number; to: number } | null {
   const allowed = Math.floor(lines.length * GUTTER_CROSSING_SHARE);
   const minWidth = median(runs.map((r) => r.size)) * GUTTER_MIN_RATIO;
 
-  let best: { from: number; to: number } | null = null;
+  const bands: { from: number; to: number }[] = [];
   let start = -1;
   for (let i = 0; i <= span + 1; i += 1) {
     const open = i <= span && coverage[i] <= allowed;
@@ -334,25 +328,28 @@ function findGutter(lines: Run[][]): { from: number; to: number } | null {
     if (!open && start !== -1) {
       // A band touching either edge is margin, not a gutter.
       const inner = start > 0 && i <= span;
-      if (inner && i - start >= minWidth && (!best || i - start > best.to - best.from)) {
-        best = { from: minX + start, to: minX + i };
-      }
+      if (inner && i - start >= minWidth) bands.push({ from: minX + start, to: minX + i });
       start = -1;
     }
   }
-  if (!best) return null;
 
-  const gutter = best;
-  const left = runs.filter((r) => r.x + r.width <= gutter.from + 1);
-  const right = runs.filter((r) => r.x >= gutter.to - 1);
   const total = textLength(runs);
   const linesWith = (side: Run[]) => groupIntoLines(side).length;
-
   const isColumn = (side: Run[]) =>
     textLength(side) >= total * COLUMN_MIN_SHARE &&
     linesWith(side) >= COLUMN_MIN_LINES;
 
-  return isColumn(left) && isColumn(right) ? gutter : null;
+  // Widest first, but the widest is not always the gutter: a gap inside a
+  // narrow sidebar - between a caption and its "0:28" - can be wider than
+  // the gutter beside it, and has no real column on one side.
+  bands.sort((p, q) => q.to - q.from - (p.to - p.from));
+  return (
+    bands.find(
+      (band) =>
+        isColumn(runs.filter((r) => r.x + r.width <= band.from + 1)) &&
+        isColumn(runs.filter((r) => r.x >= band.to - 1))
+    ) ?? null
+  );
 }
 
 /**
@@ -493,33 +490,69 @@ function renderRuns(runs: Run[], body: number): string {
   return text;
 }
 
-/**
- * `pagerender` callback for pdf-parse.
- */
-export async function renderPage(pageData: any): Promise<string> {
-  const textContent = await pageData.getTextContent({
-    normalizeWhitespace: false,
-    disableCombineTextItems: false,
-  });
+/** A page's visible runs. */
+async function readPage(page: any): Promise<PageRuns> {
+  const textContent: { items: TextItem[] } = await page.getTextContent();
 
-  return renderTextContent(textContent, pageData.view);
+  return dropNoteMarks(
+    textContent.items
+      .filter((item) => isInView(item, page.view))
+      .map(toRun)
+      .filter((run): run is Run => run !== null)
+  );
 }
 
-/** A heading that opens a section of notes, alone on its line. */
-const NOTES_HEADING_RE = /^\s*(?:end|foot)?notes\s*$/i;
+/**
+ * pdf.js ships only as ES modules, which this CommonJS backend can reach only
+ * through a native `import()` - TypeScript would compile a written one into
+ * `require()`. It is the same pdf.js the viewer runs, so the text narrated is
+ * the text the viewer highlights; an older one, bundled with pdf-parse, ran
+ * the words of some PDFs together ("Theaimofthisarticle").
+ */
+const importModule = new Function("url", "return import(url)") as (
+  url: string
+) => Promise<any>;
+
+/** Every page's visible runs, in page order. */
+export async function readPdf(data: Uint8Array): Promise<PageRuns[]> {
+  const pdfjs = await importModule(
+    pathToFileURL(require.resolve("pdfjs-dist/legacy/build/pdf.mjs")).href
+  );
+  const doc = await pdfjs.getDocument({ data, isEvalSupported: false }).promise;
+  try {
+    const pages: PageRuns[] = [];
+    for (let number = 1; number <= doc.numPages; number += 1) {
+      pages.push(await readPage(await doc.getPage(number)));
+    }
+    return pages;
+  } finally {
+    await doc.destroy();
+  }
+}
+
+/** Every page's text, laid out against the document's own body text size. */
+export function renderPages(pages: PageRuns[]): string[] {
+  const body = dominantSize(pages.flat());
+  return pages.map((runs) => renderPageRuns(runs, body));
+}
+
+/** A heading, alone on its line, that opens a section not read aloud. */
+const UNREAD_HEADING_RE =
+  /^\s*(?:(?:end|foot)?notes|references|bibliography|works cited|literature cited)\s*$/i;
 
 /**
- * Drop sections of endnotes or collected footnotes from page texts.
+ * Drop the sections a reader looks things up in rather than reads: endnotes
+ * or collected footnotes, and the reference list.
  *
- * The notes are commentary the reader jumps to, not part of the text's flow,
- * and their reference marks are already gone (see dropNoteMarks), so read in
- * place they would only interrupt. A section runs from its heading through
- * its entries, which are set without paragraph spacing between them, to the
- * first paragraph break - carrying on across page breaks, since the entries
- * often spill onto the next page.
+ * Notes are commentary the reader jumps to, and their reference marks are
+ * already gone (see dropNoteMarks), so read in place they would only
+ * interrupt; a reference list is not prose at all. A section runs from its
+ * heading through its entries, which are set without paragraph spacing
+ * between them, to the first paragraph break - carrying on across page
+ * breaks, since the entries usually spill onto the next page.
  */
-export function stripNotesSections(pageTexts: string[]): string[] {
-  let inNotes = false;
+export function stripUnreadSections(pageTexts: string[]): string[] {
+  let inSection = false;
   // Blank lines straight after the heading are its own spacing, not the end
   // of the section.
   let seenEntry = false;
@@ -528,9 +561,9 @@ export function stripNotesSections(pageTexts: string[]): string[] {
     const kept: string[] = [];
 
     for (const line of text.split("\n")) {
-      if (!inNotes) {
-        if (NOTES_HEADING_RE.test(line)) {
-          inNotes = true;
+      if (!inSection) {
+        if (UNREAD_HEADING_RE.test(line)) {
+          inSection = true;
           seenEntry = false;
         } else {
           kept.push(line);
@@ -541,7 +574,7 @@ export function stripNotesSections(pageTexts: string[]): string[] {
       if (line.trim()) {
         seenEntry = true;
       } else if (seenEntry) {
-        inNotes = false;
+        inSection = false;
         kept.push(line);
       }
     }

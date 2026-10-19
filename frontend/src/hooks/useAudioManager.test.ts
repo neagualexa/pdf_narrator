@@ -29,7 +29,6 @@ beforeAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   mockedApi.stopAudio.mockResolvedValue(undefined);
-  mockedApi.cleanupAudio.mockResolvedValue(undefined);
 });
 
 const URL_FOR = (i: number) => `http://localhost:3001/audio/idx${i}.mp3`;
@@ -56,7 +55,6 @@ test("playing a prepared sentence reuses the buffered element", async () => {
     await result.current.playAudio(
       1,
       URL_FOR(1),
-      "idx1.mp3",
       () => {},
       () => {}
     );
@@ -71,10 +69,10 @@ test("auto-advance does NOT hit the backend /stop endpoint", async () => {
   const { result } = renderHook(() => useAudioManager());
 
   await act(async () => {
-    await result.current.playAudio(0, URL_FOR(0), "idx0.mp3", () => {}, () => {});
+    await result.current.playAudio(0, URL_FOR(0), () => {}, () => {});
   });
   await act(async () => {
-    await result.current.playAudio(1, URL_FOR(1), "idx1.mp3", () => {}, () => {});
+    await result.current.playAudio(1, URL_FOR(1), () => {}, () => {});
   });
 
   // This is the fix: /stop would kill in-flight prefetch generation.
@@ -102,7 +100,7 @@ test("a prepared element with a stale url is discarded, not played", async () =>
   // Sentence 2 was regenerated at a new url (e.g. after a speed change).
   const fresh = "http://localhost:3001/audio/idx2-regenerated.mp3";
   await act(async () => {
-    await result.current.playAudio(2, fresh, "idx2-regenerated.mp3", () => {}, () => {});
+    await result.current.playAudio(2, fresh, () => {}, () => {});
   });
 
   expect(result.current.getCurrentAudio()?.src).toBe(fresh);
@@ -137,13 +135,13 @@ test("the ended handler fires for the current sentence and is superseded on swit
   const endedB = jest.fn();
 
   await act(async () => {
-    await result.current.playAudio(0, URL_FOR(0), "idx0.mp3", endedA, () => {});
+    await result.current.playAudio(0, URL_FOR(0), endedA, () => {});
   });
   const audioA = result.current.getCurrentAudio()!;
 
   // User jumps to another sentence mid-playback.
   await act(async () => {
-    await result.current.playAudio(7, URL_FOR(7), "idx7.mp3", endedB, () => {});
+    await result.current.playAudio(7, URL_FOR(7), endedB, () => {});
   });
 
   // The stale element finishing must not advance playback.

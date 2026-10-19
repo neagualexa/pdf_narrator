@@ -1,199 +1,111 @@
-import sys
-import os
+"""
+Speaks sentences into MP3 files, as a long-lived worker.
+
+Reads one job per line on stdin - {"engine", "text", "voice", "wpm",
+"output"} as JSON - and answers each, in order, with one line:
+{"success": true} or {"success": false, "error": ...}. Staying up is the
+point: a Piper voice takes about half a second to load, a third of the time it
+takes to speak a sentence, so each is loaded once and kept.
+
+The caller names the output file, so it can tell whether the audio already
+exists without asking; this only writes it.
+"""
+
+import functools
 import json
+import os
 import subprocess
+import sys
 import tempfile
-import hashlib
-import signal
+import wave
 from pathlib import Path
 
-# Global flag for graceful shutdown
-shutdown_requested = False
+from pronunciation import pronounce
 
-def signal_handler(signum, frame):
-    """Handle shutdown signals gracefully"""
-    global shutdown_requested
-    shutdown_requested = True
-    print(json.dumps({"success": False, "error": "Process interrupted"}), file=sys.stderr)
-    sys.exit(1)
+VOICES_DIR = Path(__file__).parent / "piper_voices"
+# The rate Piper speaks at its natural pace: a requested rate is read as a
+# multiple of it, within what Piper still renders cleanly.
+PIPER_NATURAL_WPM = 180
+PIPER_SPEED_RANGE = (0.5, 2.0)
 
-# Register signal handlers
-signal.signal(signal.SIGTERM, signal_handler)
-signal.signal(signal.SIGINT, signal_handler)
 
-def text_to_audio_file(text, speed=180, output_dir="audio_files", sentence_index=None, voice_id=None):
-    """
-    Generates an audio file from text using pyttsx3 and converts it to browser-compatible format using ffmpeg.
-    
-    Args:
-        text (str): The text to convert to speech
-        speed (int): The speech rate in words per minute (default: 180)
-        output_dir (str): Directory to save audio files
-        sentence_index (int): Optional sentence index to include in filename for caching
-        voice_id (str): Optional voice ID to use for speech synthesis
-    
-    Returns:
-        str: Path to the generated audio file
-    """
-    global shutdown_requested
-    
-    try:
-        # Check for shutdown signal
-        if shutdown_requested:
-            raise Exception("Process interrupted")
-            
-        # Ensure output directory exists
-        Path(output_dir).mkdir(exist_ok=True)
-        
-        # Create a unique filename based on text hash, speed, voice, and sentence index
-        text_hash = hashlib.md5(f"{text}_{speed}_{voice_id or 'default'}".encode()).hexdigest()[:8]
-        
-        # Include sentence index in filename if provided for better caching
-        if sentence_index is not None:
-            base_name = f"speech_idx{sentence_index}_{text_hash}"
-        else:
-            base_name = f"speech_{text_hash}"
-        
-        # Final MP3 file for browser compatibility
-        final_filename = f"{base_name}.mp3"
-        final_filepath = os.path.join(output_dir, final_filename)
-        
-        # Check if file already exists (server-side caching)
-        if os.path.exists(final_filepath):
-            return final_filepath
-        
-        # Use a temporary file for pyttsx3 output
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-            temp_filepath = temp_file.name
-        
+@functools.lru_cache(maxsize=None)
+def load_piper_voice(voice_id: str):
+    from piper import PiperVoice
+
+    model = VOICES_DIR / f"{voice_id}.onnx"
+    if not model.exists():
+        raise FileNotFoundError(f"Piper voice '{voice_id}' not found in {VOICES_DIR}")
+    return PiperVoice.load(str(model))
+
+
+def synthesize_piper(text: str, voice_id: str, wpm: float, wav_path: str) -> None:
+    from piper import SynthesisConfig
+
+    low, high = PIPER_SPEED_RANGE
+    speed = min(high, max(low, wpm / PIPER_NATURAL_WPM))
+    config = SynthesisConfig(
+        length_scale=1.0 / speed,  # Piper stretches time: shorter is faster
+        noise_scale=0.667,
+        noise_w_scale=0.8,
+        normalize_audio=True,
+    )
+    with wave.open(wav_path, "wb") as wav_file:
+        load_piper_voice(voice_id).synthesize_wav(text, wav_file, syn_config=config)
+
+
+def synthesize_pyttsx3(text: str, voice_id: str, wpm: float, wav_path: str) -> None:
+    import pyttsx3
+
+    engine = pyttsx3.init(driverName="nsss")  # macOS's speech synthesiser
+    engine.setProperty("rate", wpm)
+    if voice_id:
+        if not any(voice.id == voice_id for voice in engine.getProperty("voices")):
+            raise ValueError(f"pyttsx3 voice '{voice_id}' not found")
+        engine.setProperty("voice", voice_id)
+    engine.save_to_file(text, wav_path)
+    engine.runAndWait()
+
+
+ENGINES = {"piper": synthesize_piper, "pyttsx3": synthesize_pyttsx3}
+
+
+def to_mp3(wav_path: str, mp3_path: str) -> None:
+    """Mono 64 kbit/s MP3 at 22.05 kHz: plenty for speech, and plays everywhere."""
+    subprocess.run(
+        ["ffmpeg", "-i", wav_path, "-y", "-acodec", "libmp3lame", "-ar", "22050",
+         "-ab", "64k", "-ac", "1", "-f", "mp3", "-loglevel", "error", mp3_path],
+        check=True, capture_output=True, timeout=30,
+    )
+
+
+def generate(job: dict) -> None:
+    synthesize = ENGINES[job["engine"]]
+    output = job["output"]
+    # Written aside and moved into place, so a half-written file - from a
+    # failure, or a stop request killing this process - is never served as
+    # the sentence's audio.
+    partial = f"{output}.{os.getpid()}.part"
+    with tempfile.TemporaryDirectory() as scratch:
+        wav_path = os.path.join(scratch, "speech.wav")
+        synthesize(pronounce(job["text"]), job.get("voice") or "", float(job["wpm"]), wav_path)
         try:
-            # Check for shutdown signal before TTS
-            if shutdown_requested:
-                raise Exception("Process interrupted")
-                
-            # Use pyttsx3 to generate audio
-            import pyttsx3
-            
-            # Initialize TTS engine
-            engine = pyttsx3.init(driverName='nsss') # Use 'nsss' for macOS, adjust as needed for other platforms
-            
-            # Set properties for better performance
-            engine.setProperty('rate', speed)
-            
-            # Set voice if specified
-            if voice_id:
-                voices = engine.getProperty('voices')
-                # Try to find the voice by ID first
-                for voice in voices:
-                    if voice.id == voice_id:
-                        engine.setProperty('voice', voice.id)
-                        break
-                else:
-                    # If voice ID not found, try to match by index (for backward compatibility)
-                    try:
-                        voice_index = int(voice_id)
-                        if 0 <= voice_index < len(voices):
-                            engine.setProperty('voice', voices[voice_index].id)
-                    except (ValueError, IndexError):
-                        # If voice not found, use default voice
-                        print(f"Warning: Voice '{voice_id}' not found, using default voice", file=sys.stderr)
-            
-            # Save to temporary file
-            engine.save_to_file(text, temp_filepath)
-            engine.runAndWait()
-            
-            # Check for shutdown signal after TTS
-            if shutdown_requested:
-                raise Exception("Process interrupted")
-            
-            # Check if the temporary file was created
-            if not os.path.exists(temp_filepath):
-                raise Exception("pyttsx3 failed to create audio file")
-            
-            # Convert the file to MP3 using ffmpeg for browser compatibility
-            try:
-                # Use ffmpeg to convert to MP3 with optimized settings
-                ffmpeg_cmd = [
-                    'ffmpeg',
-                    '-i', temp_filepath,          # Input file
-                    '-y',                         # Overwrite output file if it exists
-                    '-acodec', 'libmp3lame',     # Use LAME MP3 encoder
-                    '-ar', '22050',              # Sample rate: 22.05 kHz (good for speech)
-                    '-ab', '64k',                # Bit rate: 64kbps (sufficient for speech)
-                    '-ac', '1',                  # Mono channel
-                    '-f', 'mp3',                 # Force MP3 format
-                    '-loglevel', 'error',        # Reduce ffmpeg verbosity
-                    final_filepath               # Output file
-                ]
-                
-                # Run ffmpeg with timeout protection
-                result = subprocess.run(
-                    ffmpeg_cmd, 
-                    capture_output=True, 
-                    text=True, 
-                    timeout=30  # 30 second timeout
-                )
-                
-                if result.returncode != 0:
-                    raise Exception(f"ffmpeg conversion failed: {result.stderr}")
-                
-                # Verify the final file exists and has content
-                if not os.path.exists(final_filepath) or os.path.getsize(final_filepath) == 0:
-                    raise Exception("ffmpeg failed to create valid output file")
-                
-                return final_filepath
-                
-            except subprocess.TimeoutExpired:
-                raise Exception("ffmpeg conversion timed out")
-            except FileNotFoundError:
-                raise Exception("ffmpeg not found. Please install ffmpeg.")
-            
+            to_mp3(wav_path, partial)
+            os.replace(partial, output)
         finally:
-            # Clean up temporary file
-            if os.path.exists(temp_filepath):
-                try:
-                    os.unlink(temp_filepath)
-                except OSError:
-                    pass  # Ignore cleanup errors
-        
-    except Exception as e:
-        # Clean up any partial files
-        if 'final_filepath' in locals() and os.path.exists(final_filepath):
-            try:
-                os.unlink(final_filepath)
-            except OSError:
-                pass
-        
-        raise e
+            if os.path.exists(partial):
+                os.unlink(partial)
+
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        result = {
-            "success": False,
-            "error": "Usage: python generate_audio.py <text> [speed] [output_dir] [sentence_index] [voice_id]"
-        }
-        print(json.dumps(result), file=sys.stderr)
-        sys.exit(1)
-    
-    text = sys.argv[1]
-    speed = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 180
-    output_dir = sys.argv[3] if len(sys.argv) > 3 else "audio_files"
-    sentence_index = int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4].isdigit() else None
-    voice_id = sys.argv[5] if len(sys.argv) > 5 else None
-    
-    try:
-        audio_path = text_to_audio_file(text, speed, output_dir, sentence_index, voice_id)
-        # Return JSON response for easier parsing
-        result = {
-            "success": True,
-            "audio_path": audio_path,
-            "filename": os.path.basename(audio_path)
-        }
-        print(json.dumps(result))
-    except Exception as e:
-        result = {
-            "success": False,
-            "error": str(e)
-        }
-        print(json.dumps(result), file=sys.stderr)
-        sys.exit(1)
+    # stdout carries the answers, one line per job, so anything an engine
+    # prints goes to stderr instead of corrupting them.
+    answers = sys.stdout
+    sys.stdout = sys.stderr
+    for line in sys.stdin:
+        try:
+            generate(json.loads(line))
+            result = {"success": True}
+        except Exception as error:  # Reported to the caller, which shows it.
+            result = {"success": False, "error": str(error)}
+        print(json.dumps(result), file=answers, flush=True)

@@ -8,7 +8,7 @@ const router = Router();
 
 // Route to get available TTS voices
 router.get("/voices", (req: Request, res: Response): void => {
-  runPythonScript(CONFIG.SCRIPTS.GET_VOICES, [])
+  runPythonScript(CONFIG.SCRIPTS.GET_VOICES, "")
     .then(({ stdout, stderr, code }) => {
       if (code === 0 && stdout.trim()) {
         try {
@@ -72,31 +72,6 @@ router.post("/tts-engine", (req: Request, res: Response): void => {
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
-});
-
-// Route to set the TTS engine (alias for compatibility)
-router.post("/set-tts-engine", (req: Request, res: Response): void => {
-  const { engine } = req.body;
-
-  if (!ttsEngineManager.isValidEngine(engine)) {
-    res.status(400).json({ error: "Invalid TTS engine specified." });
-    return;
-  }
-
-  try {
-    ttsEngineManager.setEngine(engine);
-    res.json({ success: true, message: `TTS engine set to ${engine}.` });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-// Route to get the current TTS engine
-router.get("/current-tts-engine", (req: Request, res: Response): void => {
-  res.json({
-    success: true,
-    engine: ttsEngineManager.getCurrentEngine(),
-  });
 });
 
 export default router;

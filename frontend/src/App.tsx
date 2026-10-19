@@ -2,6 +2,7 @@ import React, {
   useReducer,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -11,7 +12,11 @@ import {
   initialPlaybackState,
 } from "./reducers/playbackReducer";
 import { useAudioManager } from "./hooks/useAudioManager";
-import { useAudioCache, LOOKAHEAD } from "./hooks/useAudioCache";
+import {
+  useAudioCache,
+  LOOKAHEAD,
+  SpeechSettings,
+} from "./hooks/useAudioCache";
 import { AudioCacheEntry, PlaybackAction } from "./types";
 import { LoadingSpinner, ErrorMessage } from "./components/LoadingSpinner";
 import { SentenceItem } from "./components/SentenceItem";
@@ -102,13 +107,8 @@ export default function App() {
     [],
   );
 
-  const {
-    getCache,
-    ensureAudio,
-    prefetchAhead,
-    clearCacheEntry,
-    cleanupAllCache,
-  } = useAudioCache(handleCacheChange);
+  const { getAudio, ensureAudio, prefetchAhead, clearCache } =
+    useAudioCache(handleCacheChange);
 
   const {
     sentences,
@@ -126,6 +126,15 @@ export default function App() {
     voicesLoading,
     currentTtsEngine,
   } = appState;
+
+  const speechSettings: SpeechSettings = useMemo(
+    () => ({
+      speed: speechSpeed,
+      voiceId: selectedVoiceId,
+      engine: currentTtsEngine,
+    }),
+    [speechSpeed, selectedVoiceId, currentTtsEngine],
+  );
 
   // Refs mirroring state that callbacks read, so handlePlay does not have to be
   // re-created (and re-arm stale closures) on every cache write.
@@ -239,22 +248,14 @@ export default function App() {
       prefetchAhead(
         index,
         sentences,
-        speechSpeed,
-        selectedVoiceId,
+        speechSettings,
         LOOKAHEAD,
         (readyIndex, entry) => prepare(readyIndex, entry.url),
       ).catch((err: any) => {
         console.warn("Prefetch failed:", err);
       });
     },
-    [
-      prefetchAhead,
-      sentences,
-      speechSpeed,
-      selectedVoiceId,
-      prepare,
-      prunePrepared,
-    ],
+    [prefetchAhead, sentences, speechSettings, prepare, prunePrepared],
   );
 
   // Audio playback handler
@@ -273,7 +274,9 @@ export default function App() {
       }
 
       try {
-        const cachedAudio = !isRetry ? getCache().get(index) : null;
+        const cachedAudio = !isRetry
+          ? getAudio(index, sentences[index], speechSettings)
+          : undefined;
 
         // Only show the spinner on a genuine cache miss - prefetched sentences
         // should never flash it.
@@ -283,13 +286,9 @@ export default function App() {
 
         let entry;
         try {
-          entry = await ensureAudio(
-            index,
-            sentences[index],
-            speechSpeed,
-            selectedVoiceId,
-            { force: isRetry },
-          );
+          entry = await ensureAudio(index, sentences[index], speechSettings, {
+            force: isRetry,
+          });
         } finally {
           if (!cachedAudio) {
             dispatchApp({ type: "SET_GENERATING_AUDIO_INDEX", payload: null });
@@ -309,7 +308,6 @@ export default function App() {
         await playAudio(
           index,
           entry.url,
-          entry.filename,
           () => {
             // On audio ended
             dispatchPlaybackSync({ type: "STOP" });
@@ -332,7 +330,6 @@ export default function App() {
             // If this was cached audio that failed and it's not already a retry,
             // try regenerating once
             if (cachedAudio && !isRetry) {
-              clearCacheEntry(index);
               clearPreparedAt(index);
               handlePlayRef.current?.(index, true);
               return;
@@ -348,13 +345,11 @@ export default function App() {
     },
     [
       sentences,
-      speechSpeed,
-      selectedVoiceId,
-      getCache,
+      speechSettings,
+      getAudio,
       ensureAudio,
       playAudio,
       schedulePrefetch,
-      clearCacheEntry,
       clearPreparedAt,
       dispatchPlaybackSync,
     ],
@@ -372,7 +367,7 @@ export default function App() {
 
       // Clear frontend cache
       console.log("Clearing frontend audio cache...");
-      cleanupAllCache();
+      clearCache();
       clearPrepared();
 
       // Clear backend cache
@@ -389,7 +384,7 @@ export default function App() {
       dispatchApp({ type: "SET_GENERATING_AUDIO_INDEX", payload: null });
       dispatchPlaybackSync({ type: "STOP" });
     }
-  }, [stopCurrentAudio, cleanupAllCache, clearPrepared, dispatchPlaybackSync]);
+  }, [stopCurrentAudio, clearCache, clearPrepared, dispatchPlaybackSync]);
 
   // Simple pause function that doesn't clear cache
   const handlePause = useCallback(async () => {
@@ -495,20 +490,9 @@ export default function App() {
     dispatchApp({ type: "SET_SELECTED_VOICE", payload: voiceId });
   }, []);
 
-  // Stable cleanup function to avoid dependencies issues
-  const stableCleanupCache = useCallback(() => {
-    // Prepared elements hold audio generated at the old speed/voice, so they
-    // have to go whenever the cache does.
-    clearPrepared();
-    cleanupAllCache();
-  }, [cleanupAllCache, clearPrepared]);
-
   const handleTtsEngineChange = useCallback(
     async (engine: "pyttsx3" | "piper") => {
       try {
-        // Clear cache when switching engines
-        stableCleanupCache();
-
         // Update the backend TTS engine
         await api.setTtsEngine(engine);
 
@@ -556,7 +540,7 @@ export default function App() {
         dispatchApp({ type: "SET_VOICES_LOADING", payload: false });
       }
     },
-    [stableCleanupCache],
+    [],
   );
 
   // --- Voice demo ----------------------------------------------------------
@@ -599,11 +583,9 @@ export default function App() {
     try {
       setIsDemoLoading(true);
 
-      // Index -1 keeps the demo out of the sentence cache's numbering.
-      const result = await api.generateAudioIndexed(
+      const result = await api.generateAudio(
         text,
         speechSpeed,
-        -1,
         selectedVoiceId ?? undefined,
       );
 
@@ -643,23 +625,8 @@ export default function App() {
     dispatchApp({ type: "SET_ERROR", payload: null });
   }, []);
 
-  // Clear cache when speech speed changes
-  useEffect(() => {
-    stableCleanupCache();
-  }, [speechSpeed, stableCleanupCache]);
-
-  // Clear cache when sentences change (new PDF uploaded)
-  useEffect(() => {
-    stableCleanupCache();
-  }, [sentences.length, stableCleanupCache]);
-
   // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      cleanup();
-      cleanupAllCache();
-    };
-  }, [cleanup, cleanupAllCache]);
+  useEffect(() => cleanup, [cleanup]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -1040,10 +1007,10 @@ export default function App() {
         {generatingAudioIndex !== null
           ? `Generating audio for sentence ${generatingAudioIndex + 1}`
           : playbackState.status === "playing"
-          ? `Playing sentence ${playbackState.currentIndex + 1} of ${
-              sentences.length
-            }`
-          : ""}
+            ? `Playing sentence ${playbackState.currentIndex + 1} of ${
+                sentences.length
+              }`
+            : ""}
       </div>
 
       <header className="app-bar">
@@ -1179,10 +1146,7 @@ export default function App() {
                 </p>
               </div>
               <footer className="footer">
-                <p>
-                  React Frontend | Node.js &amp; Python Backend | TTS Engine |
-                  Created with Claude Sonnet 4
-                </p>
+                <p>Created with Claude Code</p>
               </footer>
             </div>
           )}

@@ -108,7 +108,6 @@ export function useAudioManager() {
     async (
       index: number,
       audioUrl: string,
-      filename: string,
       onEnded: () => void,
       onError: (error: string) => void,
     ): Promise<void> => {
@@ -145,11 +144,6 @@ export function useAudioManager() {
           console.error("Audio error event:", event);
           currentAudioRef.current = null;
           onError("Failed to play audio");
-
-          // Cleanup the audio file from server
-          api.cleanupAudio(filename).catch((err) => {
-            console.warn("Failed to cleanup audio file:", err);
-          });
         }
       });
 

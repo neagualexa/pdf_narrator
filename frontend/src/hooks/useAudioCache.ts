@@ -4,8 +4,28 @@ import { AudioCacheEntry } from "../types";
 
 export const LOOKAHEAD = 2;
 
+/** Everything that changes what a sentence sounds like, bar its text. */
+export interface SpeechSettings {
+  /** Words per minute. */
+  speed: number;
+  voiceId?: string | null;
+  engine: string;
+}
+
 /**
- * Owns the sentence -> audio file cache.
+ * What an entry was made from. An entry only answers for the same sentence
+ * spoken the same way, so changing the speed, voice or engine - or loading a
+ * new document - needs no invalidation: older entries just stop matching.
+ */
+function speechKey(sentence: string, { speed, voiceId, engine }: SpeechSettings) {
+  return JSON.stringify([engine, voiceId ?? null, speed, sentence]);
+}
+
+/**
+ * Owns the sentence -> audio cache, a window of sentences around the one
+ * playing. The audio files themselves belong to the server, which keeps them
+ * by content and expires them by age; dropping an entry here only forgets
+ * its url.
  *
  * The cache lives in a ref rather than in reducer state so that concurrent
  * prefetches never clobber each other with a stale snapshot of the Map. The
@@ -16,9 +36,9 @@ export function useAudioCache(
   onCacheChange?: (newCache: Map<number, AudioCacheEntry>) => void,
 ) {
   const cacheRef = useRef<Map<number, AudioCacheEntry>>(new Map());
-  const pendingRef = useRef<Map<number, Promise<AudioCacheEntry | null>>>(
-    new Map(),
-  );
+  const pendingRef = useRef<
+    Map<number, { key: string; request: Promise<AudioCacheEntry | null> }>
+  >(new Map());
 
   // Keep the callback in a ref so the returned functions stay stable.
   const onCacheChangeRef = useRef(onCacheChange);
@@ -28,17 +48,19 @@ export function useAudioCache(
     onCacheChangeRef.current?.(new Map(cacheRef.current));
   }, []);
 
-  const getCache = useCallback(() => cacheRef.current, []);
-
-  const isPending = useCallback(
-    (index: number) => pendingRef.current.has(index),
+  /** The cached audio for a sentence spoken with `settings`, if any. */
+  const getAudio = useCallback(
+    (index: number, sentence: string, settings: SpeechSettings) => {
+      const entry = cacheRef.current.get(index);
+      return entry?.key === speechKey(sentence, settings) ? entry : undefined;
+    },
     [],
   );
 
   /**
-   * Drops cache entries that are outside the window we still care about
+   * Forgets entries outside the window still wanted
    * ([currentIndex - 1, currentIndex + LOOKAHEAD]) once the cache grows past
-   * `maxCacheSize`, deleting the backing files on the server.
+   * `maxCacheSize`.
    */
   const manageCacheSize = useCallback(
     (currentIndex: number, maxCacheSize: number = LOOKAHEAD + 3) => {
@@ -50,47 +72,11 @@ export function useAudioCache(
       // Furthest entries first, so we drop the least useful ones.
       const evictable = Array.from(cacheRef.current.keys())
         .filter((index) => index < keepFrom || index > keepTo)
-        .map((index) => ({ index, distance: Math.abs(index - currentIndex) }))
-        .sort((a, b) => b.distance - a.distance);
+        .sort((a, b) => Math.abs(b - currentIndex) - Math.abs(a - currentIndex));
 
-      const excessCount = cacheRef.current.size - maxCacheSize;
-      const removed: number[] = [];
-
-      for (let i = 0; i < excessCount && i < evictable.length; i++) {
-        const entryIndex = evictable[i].index;
-        const entry = cacheRef.current.get(entryIndex);
-        if (!entry) continue;
-
-        api.cleanupAudio(entry.filename).catch((err) => {
-          console.warn("Failed to cleanup distant audio file:", err);
-        });
-        cacheRef.current.delete(entryIndex);
-        removed.push(entryIndex);
-      }
-
-      if (removed.length > 0) {
-        console.log(
-          `Cache management: removed ${removed.length} distant entries, cache size: ${cacheRef.current.size}`,
-        );
-        publishCache();
-      }
-    },
-    [publishCache],
-  );
-
-  const clearCacheEntry = useCallback(
-    (index: number) => {
-      pendingRef.current.delete(index);
-
-      const entry = cacheRef.current.get(index);
-      if (entry) {
-        // Cleanup the audio file from server
-        api.cleanupAudio(entry.filename).catch((err) => {
-          console.warn("Failed to cleanup audio file:", err);
-        });
-        cacheRef.current.delete(index);
-        publishCache();
-      }
+      const excess = cacheRef.current.size - maxCacheSize;
+      evictable.slice(0, excess).forEach((index) => cacheRef.current.delete(index));
+      if (excess > 0 && evictable.length > 0) publishCache();
     },
     [publishCache],
   );
@@ -104,34 +90,27 @@ export function useAudioCache(
     (
       index: number,
       sentence: string,
-      speechSpeed: number,
-      voiceId?: string | null,
+      settings: SpeechSettings,
       options?: { force?: boolean },
     ): Promise<AudioCacheEntry | null> => {
       if (!sentence) return Promise.resolve(null);
 
-      if (options?.force) {
-        cacheRef.current.delete(index);
-        pendingRef.current.delete(index);
-      } else {
+      const key = speechKey(sentence, settings);
+      if (!options?.force) {
         const cached = cacheRef.current.get(index);
-        if (cached) return Promise.resolve(cached);
+        if (cached?.key === key) return Promise.resolve(cached);
 
         const pending = pendingRef.current.get(index);
-        if (pending) return pending;
+        if (pending?.key === key) return pending.request;
       }
 
       const request = api
-        .generateAudioIndexed(
-          sentence,
-          speechSpeed,
-          index,
-          voiceId || undefined,
-        )
+        .generateAudio(sentence, settings.speed, settings.voiceId || undefined)
         .then((response) => {
           const entry: AudioCacheEntry = {
             url: response.audioUrl,
             filename: response.filename,
+            key,
           };
           cacheRef.current.set(index, entry);
           publishCache();
@@ -145,12 +124,12 @@ export function useAudioCache(
           return null;
         })
         .finally(() => {
-          if (pendingRef.current.get(index) === request) {
+          if (pendingRef.current.get(index)?.request === request) {
             pendingRef.current.delete(index);
           }
         });
 
-      pendingRef.current.set(index, request);
+      pendingRef.current.set(index, { key, request });
       return request;
     },
     [publishCache],
@@ -166,8 +145,7 @@ export function useAudioCache(
     async (
       currentIndex: number,
       sentences: string[],
-      speechSpeed: number,
-      voiceId?: string | null,
+      settings: SpeechSettings,
       lookahead: number = LOOKAHEAD,
       onReady?: (index: number, entry: AudioCacheEntry) => void,
     ) => {
@@ -179,23 +157,10 @@ export function useAudioCache(
       if (currentIndex > 0) indices.push(currentIndex - 1);
 
       for (const index of indices) {
-        if (cacheRef.current.has(index)) {
-          // Already available - still let the caller buffer it.
-          onReady?.(index, cacheRef.current.get(index)!);
-          continue;
-        }
-
-        try {
-          const entry = await ensureAudio(
-            index,
-            sentences[index],
-            speechSpeed,
-            voiceId,
-          );
-          if (entry) onReady?.(index, entry);
-        } catch (err) {
-          console.warn(`Failed to prefetch sentence ${index + 1}:`, err);
-        }
+        // A cache hit resolves at once, and is still handed to the caller to
+        // buffer.
+        const entry = await ensureAudio(index, sentences[index], settings);
+        if (entry) onReady?.(index, entry);
       }
 
       manageCacheSize(currentIndex);
@@ -203,27 +168,18 @@ export function useAudioCache(
     [ensureAudio, manageCacheSize],
   );
 
-  const cleanupAllCache = useCallback(() => {
+  const clearCache = useCallback(() => {
     pendingRef.current.clear();
-
     if (cacheRef.current.size === 0) return;
-
-    cacheRef.current.forEach((entry) => {
-      api.cleanupAudio(entry.filename).catch((err) => {
-        console.warn("Failed to cleanup cached audio file:", err);
-      });
-    });
     cacheRef.current = new Map();
     publishCache();
   }, [publishCache]);
 
   return {
-    getCache,
-    isPending,
+    getAudio,
     ensureAudio,
     prefetchAhead,
     manageCacheSize,
-    clearCacheEntry,
-    cleanupAllCache,
+    clearCache,
   };
 }

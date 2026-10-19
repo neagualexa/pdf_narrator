@@ -4,6 +4,8 @@ import React from "react";
 export interface AudioCacheEntry {
   url: string;
   filename: string;
+  /** The sentence and settings it was spoken with; see useAudioCache. */
+  key: string;
 }
 
 export interface AppState {

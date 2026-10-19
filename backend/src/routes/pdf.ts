@@ -1,10 +1,9 @@
 import { Router, Request, Response } from "express";
 import multer from "multer";
-import pdf from "pdf-parse";
 import fs from "fs";
 import { CONFIG } from "../config";
 import { runPythonScript } from "../pythonRunner";
-import { renderPage, stripNotesSections, stripRunningHeads } from "../pdfText";
+import { readPdf, renderPages, stripRunningHeads, stripUnreadSections } from "../pdfText";
 
 const router = Router();
 const upload = multer({ dest: CONFIG.UPLOAD_DIR });
@@ -22,41 +21,37 @@ router.post(
     try {
       const dataBuffer = fs.readFileSync(req.file.path);
 
-      // Capture each page's text as it renders so sentences can be attributed
-      // to a source page. renderPage rebuilds the text from run geometry, which
-      // is what keeps OCR'd pages (one positioned run per word, no space
-      // characters) from collapsing into "providegrounds".
-      const pageTexts: string[] = [];
-      const data = await pdf(dataBuffer, {
-        pagerender: async (pageData: any): Promise<string> => {
-          const text = await renderPage(pageData);
-          pageTexts.push(text);
-          return text;
-        },
-      });
+      // Each page's runs are collected first, so the text can be laid out
+      // against the whole document's body text size. renderPages rebuilds the
+      // text from run geometry, which is what keeps OCR'd pages (one
+      // positioned run per word, no space characters) from collapsing into
+      // "providegrounds".
+      const pages = await readPdf(new Uint8Array(dataBuffer));
+      const pageTexts = renderPages(pages);
 
       fs.unlinkSync(req.file.path);
 
       // Running heads repeat on every page and would otherwise be narrated in
       // the middle of any sentence that spans a page break. They go first, so
-      // one cannot sit inside a notes section and cut it short.
-      const cleanedPages = stripNotesSections(stripRunningHeads(pageTexts));
+      // one cannot sit inside a notes or references section and cut it short.
+      const cleanedPages = stripUnreadSections(stripRunningHeads(pageTexts));
 
       // Sentinels the splitter consumes to tag each sentence with its page.
       const markedText = cleanedPages
         .map((text, i) => `\n\n<<<PDFPAGE:${i + 1}>>>\n\n${text}`)
         .join("");
 
-      const result = await runPythonScript(CONFIG.SCRIPTS.SENTENCE_SPLITTER, [
-        markedText,
-      ]);
+      const result = await runPythonScript(
+        CONFIG.SCRIPTS.SENTENCE_SPLITTER,
+        markedText
+      );
 
       if (result.code === 0) {
         const parsed = JSON.parse(result.stdout);
         res.json({
           sentences: parsed.sentences,
           pages: parsed.pages,
-          numPages: data.numpages,
+          numPages: pages.length,
         });
       } else {
         console.error(`Sentence splitter script error:`, result.stderr);

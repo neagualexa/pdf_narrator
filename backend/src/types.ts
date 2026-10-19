@@ -1,18 +1,10 @@
-import { ChildProcess } from "child_process";
-
 export type TtsEngine = "pyttsx3" | "piper";
 
 export interface AudioGenerationRequest {
   sentence: string;
+  /** Words per minute. */
   speed?: number;
-  sentenceIndex?: number;
   voiceId?: string;
-}
-
-export interface AudioGenerationResponse {
-  audioUrl: string;
-  filename: string;
-  cached: boolean;
 }
 
 export interface VoiceResponse {
@@ -21,11 +13,6 @@ export interface VoiceResponse {
   count: number;
   engines: any;
   currentEngine: TtsEngine;
-}
-
-export interface ProcessManager {
-  activeTtsProcesses: Map<string, ChildProcess>;
-  cleanupProcess: (processId: string) => void;
 }
 
 export interface PythonScriptResult {

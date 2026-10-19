@@ -1,6 +1,8 @@
 import { TtsEngine } from "./types";
 import { CONFIG } from "./config";
 
+const ENGINES: TtsEngine[] = ["pyttsx3", "piper"];
+
 export class TtsEngineManager {
   private currentTtsEngine: TtsEngine = CONFIG.DEFAULTS.TTS_ENGINE;
 
@@ -9,18 +11,18 @@ export class TtsEngineManager {
   }
 
   public setEngine(engine: TtsEngine): void {
-    if (!["pyttsx3", "piper"].includes(engine)) {
-      throw new Error("Invalid engine. Must be 'pyttsx3' or 'piper'");
+    if (!this.isValidEngine(engine)) {
+      throw new Error(`Invalid engine. Must be one of: ${ENGINES.join(", ")}`);
     }
     this.currentTtsEngine = engine;
   }
 
   public isValidEngine(engine: string): engine is TtsEngine {
-    return ["pyttsx3", "piper"].includes(engine);
+    return (ENGINES as string[]).includes(engine);
   }
 
   public getAvailableEngines(): TtsEngine[] {
-    return ["pyttsx3", "piper"];
+    return [...ENGINES];
   }
 }
 
