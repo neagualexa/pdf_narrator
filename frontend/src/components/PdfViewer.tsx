@@ -11,18 +11,19 @@ import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 import StyledButton from "./StyledButton";
 import {
+  ACTIVE_CLASS,
   candidatesForPage,
   findSentenceSegments,
+  HOVER_CLASS,
+  MAX_CANDIDATES,
   renderTextItemHtml,
   PdfTextItem,
   SentenceSegment,
+  sentenceSelector,
 } from "../pdfHighlight";
 
 // Use external CDN as per official instructions
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
-
-/** Class marking every sentence wrapper; the hover and playing states are added to it. */
-const SENTENCE_SELECTOR = "mark[data-sentence-index]";
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 3.0;
@@ -238,6 +239,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // A new document invalidates every page's text.
   useEffect(() => {
     setTextItemsByPage(new Map());
+    textRequested.current.clear();
     setPageAspects(new Map());
     loadedPdfRef.current = null;
     setPageNumber(1);
@@ -248,7 +250,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     followedRef.current = null;
   }, [file]);
 
-  const handleTextItems = useCallback((page: number, items: PdfTextItem[]) => {
+  const storeTextItems = useCallback((page: number, items: PdfTextItem[]) => {
     setTextItemsByPage((current) => {
       // A page's text cannot change within a document, and scrolling remounts
       // pages repeatedly. Keeping the first result means a remount does not
@@ -260,6 +262,47 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     });
   }, []);
 
+  /** Pages whose text has been asked for directly, so each is fetched once. */
+  const textRequested = useRef<Set<number>>(new Set());
+
+  /**
+   * Fetches a page's text without rendering it. A page's sentences are only
+   * placed once both its neighbours' text is known, so one crossing a page
+   * break is matched whole (see findSentenceSegments).
+   */
+  const fetchTextItems = useCallback(
+    (page: number) => {
+      const pdf = loadedPdfRef.current;
+      if (!pdf || page < 1 || page > pdf.numPages) return;
+      if (textRequested.current.has(page)) return;
+      textRequested.current.add(page);
+
+      // The same call react-pdf makes, so the items - and the indices the
+      // text renderer is handed - are identical whichever arrives first.
+      pdf
+        .getPage(page)
+        .then((proxy: any) => proxy.getTextContent())
+        .then(
+          (content: any) => (content?.items ?? []) as PdfTextItem[],
+          // An unreadable page must not hold its neighbours back forever.
+          () => [],
+        )
+        .then((items: PdfTextItem[]) => {
+          if (loadedPdfRef.current === pdf) storeTextItems(page, items);
+        });
+    },
+    [storeTextItems],
+  );
+
+  const handleTextItems = useCallback(
+    (page: number, items: PdfTextItem[]) => {
+      storeTextItems(page, items);
+      fetchTextItems(page - 1);
+      fetchTextItems(page + 1);
+    },
+    [storeTextItems, fetchTextItems],
+  );
+
   /** The last `segmentsByPage` result, and the sentences it was matched against. */
   const segmentsCache = useRef<{
     sentences: string[];
@@ -269,7 +312,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
   // Where every locatable sentence sits, per page then per text item. Only
   // pages that have actually rendered are in here, so the cost tracks what is
-  // on screen rather than the length of the document.
+  // on screen rather than the length of the document. A page waits for its
+  // neighbours' text as well, rather than being placed twice and rebuilt.
   //
   // A page's result is reused for as long as the sentences are unchanged. Each
   // page's text layer is rebuilt whenever its segments change identity, so
@@ -284,19 +328,44 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
     const byPage = new Map<number, PageSegments>();
     textItemsByPage.forEach((items, page) => {
+      const reused = reusable?.get(page);
+      if (reused) {
+        byPage.set(page, reused);
+        return;
+      }
+
+      const before = textItemsByPage.get(page - 1);
+      const after = textItemsByPage.get(page + 1);
+      const hasBefore = page > 1;
+      const hasAfter = numPages !== null && page < numPages;
+      if ((hasBefore && !before) || (hasAfter && !after)) return;
+
       byPage.set(
         page,
-        reusable?.get(page) ??
-          findSentenceSegments(
-            items,
-            candidatesForPage(sentences, sentencePages, page),
-          ),
+        findSentenceSegments(
+          items,
+          candidatesForPage(sentences, sentencePages, page),
+          { before, after },
+        ),
       );
     });
 
     segmentsCache.current = { sentences, sentencePages, byPage };
     return byPage;
-  }, [textItemsByPage, sentences, sentencePages]);
+  }, [textItemsByPage, sentences, sentencePages, numPages]);
+
+  // Without page data, sentences past the matcher's fallback ceiling can never
+  // be highlighted; say so once per document rather than silently.
+  useEffect(() => {
+    if (
+      sentencePages.length !== sentences.length &&
+      sentences.length > MAX_CANDIDATES
+    ) {
+      console.warn(
+        `No per-sentence page data; only the first ${MAX_CANDIDATES} sentences can be highlighted.`,
+      );
+    }
+  }, [sentences, sentencePages]);
 
   // Must be stable: react-pdf wraps this prop in a callback that its render
   // effect depends on, so a fresh arrow would rebuild the layer every render.
@@ -314,12 +383,12 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     if (!root) return;
 
     root
-      .querySelectorAll(".pdf-sentence-hover")
-      .forEach((node) => node.classList.remove("pdf-sentence-hover"));
+      .querySelectorAll(`.${HOVER_CLASS}`)
+      .forEach((node) => node.classList.remove(HOVER_CLASS));
     if (index === null) return;
     root
-      .querySelectorAll(`mark[data-sentence-index="${index}"]`)
-      .forEach((node) => node.classList.add("pdf-sentence-hover"));
+      .querySelectorAll(sentenceSelector(index))
+      .forEach((node) => node.classList.add(HOVER_CLASS));
   }, []);
 
   /** Moves the hover class, which is plain DOM work - no re-render, no relayout. */
@@ -343,7 +412,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     const target = event.target as HTMLElement | null;
     // The target can be a text node, and the endOfContent div, the item spans
     // and the layer itself all miss the selector - all no-ops.
-    const mark = target?.closest?.(SENTENCE_SELECTOR);
+    const mark = target?.closest?.(sentenceSelector());
     if (!mark) return null;
     const index = Number(mark.getAttribute("data-sentence-index"));
     return Number.isInteger(index) ? index : null;
@@ -355,14 +424,12 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     const root = pageAreaRef.current;
     if (!root || activeSentenceIndex == null) return;
 
-    const nodes = root.querySelectorAll(
-      `mark[data-sentence-index="${activeSentenceIndex}"]`,
-    );
-    nodes.forEach((node) => node.classList.add("pdf-highlight"));
+    const nodes = root.querySelectorAll(sentenceSelector(activeSentenceIndex));
+    nodes.forEach((node) => node.classList.add(ACTIVE_CLASS));
 
     return () =>
-      nodes.forEach((node) => node.classList.remove("pdf-highlight"));
-  }, [activeSentenceIndex, textLayerVersion, pageNumber]);
+      nodes.forEach((node) => node.classList.remove(ACTIVE_CLASS));
+  }, [activeSentenceIndex, textLayerVersion]);
 
   /** Shows the armed affordance, reading Alt off the pointer event. Watching
    *  for the key itself would mean a window keydown listener, which on Windows
@@ -557,7 +624,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       activeSentenceIndex == null
         ? null
         : pageNode.querySelector<HTMLElement>(
-            `mark[data-sentence-index="${activeSentenceIndex}"]`,
+            sentenceSelector(activeSentenceIndex),
           );
 
     // Re-scroll only when the target changed, or when the sentence's mark has

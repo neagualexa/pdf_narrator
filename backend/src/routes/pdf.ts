@@ -4,7 +4,7 @@ import pdf from "pdf-parse";
 import fs from "fs";
 import { CONFIG } from "../config";
 import { runPythonScript } from "../pythonRunner";
-import { renderPage, stripRunningHeads } from "../pdfText";
+import { renderPage, stripNotesSections, stripRunningHeads } from "../pdfText";
 
 const router = Router();
 const upload = multer({ dest: CONFIG.UPLOAD_DIR });
@@ -38,8 +38,9 @@ router.post(
       fs.unlinkSync(req.file.path);
 
       // Running heads repeat on every page and would otherwise be narrated in
-      // the middle of any sentence that spans a page break.
-      const cleanedPages = stripRunningHeads(pageTexts);
+      // the middle of any sentence that spans a page break. They go first, so
+      // one cannot sit inside a notes section and cut it short.
+      const cleanedPages = stripNotesSections(stripRunningHeads(pageTexts));
 
       // Sentinels the splitter consumes to tag each sentence with its page.
       const markedText = cleanedPages

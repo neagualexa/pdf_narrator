@@ -89,6 +89,38 @@ function toRun(item: TextItem): Run | null {
   };
 }
 
+/** A note reference: "14", "3,4", "*", "†" - nothing a sentence would say. */
+const NOTE_MARK_RE = /^[\d*†‡§¶]{1,3}(?:[,–-][\d]{1,3})*$/;
+/** Largest a note mark may be relative to the text it follows. */
+const NOTE_MARK_MAX_SIZE_RATIO = 0.85;
+/** Least a note mark sits above that text's baseline, in multiples of its size. */
+const NOTE_MARK_MIN_RISE = 0.15;
+
+/**
+ * Drops footnote and endnote reference marks: the superscript "14" in
+ * "at an early age.14 From the ...". Narrated, it reads as a stray number,
+ * and glued to the full stop it hides the sentence break from the splitter.
+ *
+ * A mark is told apart by its layout rather than its text, which no number in
+ * the body shares: it is set smaller than the text it follows, raised above
+ * that text's baseline, and starts right where that text ends.
+ */
+function dropNoteMarks(runs: Run[]): Run[] {
+  const isMark = (mark: Run) =>
+    NOTE_MARK_RE.test(mark.str.trim()) &&
+    runs.some(
+      (text) =>
+        text !== mark &&
+        text.angle === mark.angle &&
+        mark.size <= text.size * NOTE_MARK_MAX_SIZE_RATIO &&
+        mark.y - text.y >= text.size * NOTE_MARK_MIN_RISE &&
+        mark.y - text.y < text.size &&
+        Math.abs(mark.x - (text.x + text.width)) <= text.size * 0.5
+    );
+
+  return runs.filter((run) => !isMark(run));
+}
+
 function groupIntoLines(runs: Run[]): Run[][] {
   // Top to bottom, then left to right, so a line's runs arrive contiguously.
   const sorted = [...runs].sort((p, q) => q.y - p.y || p.x - q.x);
@@ -185,10 +217,12 @@ export function renderTextContent(
   textContent: { items: TextItem[] },
   view?: number[]
 ): string {
-  const runs = textContent.items
-    .filter((item) => isInView(item, view))
-    .map(toRun)
-    .filter((run): run is Run => run !== null);
+  const runs = dropNoteMarks(
+    textContent.items
+      .filter((item) => isInView(item, view))
+      .map(toRun)
+      .filter((run): run is Run => run !== null)
+  );
 
   // Coordinates from different frames cannot be compared, so each orientation
   // is laid out on its own - the body first, then any sideways margin text.
@@ -419,6 +453,51 @@ export async function renderPage(pageData: any): Promise<string> {
   });
 
   return renderTextContent(textContent, pageData.view);
+}
+
+/** A heading that opens a section of notes, alone on its line. */
+const NOTES_HEADING_RE = /^\s*(?:end|foot)?notes\s*$/i;
+
+/**
+ * Drop sections of endnotes or collected footnotes from page texts.
+ *
+ * The notes are commentary the reader jumps to, not part of the text's flow,
+ * and their reference marks are already gone (see dropNoteMarks), so read in
+ * place they would only interrupt. A section runs from its heading through
+ * its entries, which are set without paragraph spacing between them, to the
+ * first paragraph break - carrying on across page breaks, since the entries
+ * often spill onto the next page.
+ */
+export function stripNotesSections(pageTexts: string[]): string[] {
+  let inNotes = false;
+  // Blank lines straight after the heading are its own spacing, not the end
+  // of the section.
+  let seenEntry = false;
+
+  return pageTexts.map((text) => {
+    const kept: string[] = [];
+
+    for (const line of text.split("\n")) {
+      if (!inNotes) {
+        if (NOTES_HEADING_RE.test(line)) {
+          inNotes = true;
+          seenEntry = false;
+        } else {
+          kept.push(line);
+        }
+        continue;
+      }
+
+      if (line.trim()) {
+        seenEntry = true;
+      } else if (seenEntry) {
+        inNotes = false;
+        kept.push(line);
+      }
+    }
+
+    return kept.join("\n");
+  });
 }
 
 /** Share of pages a line must repeat on before it counts as a running head. */

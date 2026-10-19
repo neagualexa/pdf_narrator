@@ -1104,7 +1104,7 @@ body.is-resizing {
    excluded rather than left to source order, because the armed rule below is
    more specific than the highlight and would otherwise override it. */
 .react-pdf__Page__textContent
-  mark.pdf-sentence.pdf-sentence-hover:not(.pdf-highlight) {
+  mark.pdf-sentence.pdf-sentence--hover:not(.pdf-sentence--active) {
   background-color: rgba(16, 185, 129, 0.12);
 }
 
@@ -1115,7 +1115,7 @@ body.is-resizing {
 
 .pdf-page-area.pdf-armed
   .react-pdf__Page__textContent
-  mark.pdf-sentence.pdf-sentence-hover:not(.pdf-highlight) {
+  mark.pdf-sentence.pdf-sentence--hover:not(.pdf-sentence--active) {
   background-color: rgba(16, 185, 129, 0.22);
 }
 
@@ -1123,7 +1123,7 @@ body.is-resizing {
    pdf.js paints the real glyphs on the canvas underneath and overlays
    transparent selectable text, so <mark> must stay transparent too - its
    default colour would render a second, offset copy of the words. */
-.react-pdf__Page__textContent mark.pdf-highlight {
+.react-pdf__Page__textContent mark.pdf-sentence--active {
   background-color: rgba(16, 185, 129, 0.3);
   color: transparent;
   border-radius: 2px;

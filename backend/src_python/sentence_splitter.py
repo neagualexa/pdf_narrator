@@ -15,6 +15,28 @@ shutdown_requested = False
 # (the \s+ collapse) and no symbol from vocabulary_config word_replacements.
 PAGE_MARKER_RE = re.compile(r'<<<PDFPAGE:(\d+)>>>')
 
+# Abbreviations common in academic writing that NLTK's English model does not
+# know, so it ends a sentence at them: "Wood et al. (1976) and in Bruner"
+# loses its citation and is cut after "al.". Written as punkt stores them -
+# lowercase, without the final period. Ones that often do end a sentence
+# ("etc.", "no.") are left out, since punkt would then never split there.
+ACADEMIC_ABBREVIATIONS = {
+    "al", "cf", "e.g", "i.e", "viz", "approx", "resp",
+    "fig", "figs", "eq", "eqs", "pp", "vol", "vols", "eds",
+}
+
+
+def get_sentence_tokenizer():
+    """NLTK's English sentence tokenizer, taught the abbreviations above."""
+    try:
+        from nltk.tokenize.punkt import PunktTokenizer  # NLTK >= 3.9
+        tokenizer = PunktTokenizer("english")
+    except ImportError:
+        tokenizer = nltk.data.load("tokenizers/punkt/english.pickle")
+    # No public API extends a trained model's abbreviations.
+    tokenizer._params.abbrev_types.update(ACADEMIC_ABBREVIATIONS)
+    return tokenizer
+
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
     global shutdown_requested
@@ -290,7 +312,7 @@ def split_text_into_sentences(text: str) -> None:
             return
         
         # Split into sentences
-        sentences = nltk.sent_tokenize(filtered_text)
+        sentences = get_sentence_tokenizer().tokenize(filtered_text)
         
         if shutdown_requested:
             print(json.dumps({"sentences": [], "pages": []}))

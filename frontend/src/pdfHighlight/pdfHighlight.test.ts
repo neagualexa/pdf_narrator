@@ -1,12 +1,13 @@
 import {
   candidatesForPage,
-  findHighlightRanges,
   findNormalizedRange,
   findSentenceSegments,
   normalizePage,
+  normalizeSentence,
+  PdfTextItem,
   renderTextItemHtml,
   SentenceSegment,
-} from "./pdfHighlight";
+} from ".";
 
 const items = (...strs: string[]) => strs.map((str) => ({ str }));
 
@@ -19,16 +20,29 @@ const allSegments = (segs: Map<number, SentenceSegment[]>): SentenceSegment[] =>
   return out;
 };
 
+/**
+ * Where one sentence lands on a page, as each item's first to last matched
+ * offset. A lone candidate cannot overlap anything, so this is exactly what
+ * it matched.
+ */
+const highlightRanges = (page: PdfTextItem[], sentence: string): Map<number, [number, number]> => {
+  const ranges = new Map<number, [number, number]>();
+  findSentenceSegments(page, [{ index: 0, text: sentence }]).forEach((list, itemIndex) => {
+    ranges.set(itemIndex, [list[0].from, list[list.length - 1].to]);
+  });
+  return ranges;
+};
+
 describe("pdf highlight matching", () => {
   test("plain sentence split across several text items", () => {
     const page = items("The study of ", "language use and ", "classroom interaction.");
-    const r = findHighlightRanges(page, "The study of language use and classroom interaction.");
+    const r = highlightRanges(page, "The study of language use and classroom interaction.");
     expect(Array.from(r.keys())).toEqual([0, 1, 2]);
   });
 
   test("hyphenated line break in the PDF, rejoined in the sentence", () => {
     const page = items("Researchers are now draw-\ning upon a range of theoretical approaches today.");
-    const r = findHighlightRanges(page, "Researchers are now drawing upon a range of theoretical approaches today.");
+    const r = highlightRanges(page, "Researchers are now drawing upon a range of theoretical approaches today.");
     expect(r.size).toBe(1);
   });
 
@@ -36,7 +50,7 @@ describe("pdf highlight matching", () => {
     const page = items(
       "As Krummheuer (2011) notes, ethnomethodological studies identify the structures of interaction.",
     );
-    const r = findHighlightRanges(page, "As Krummheuer notes, ethnomethodological studies identify the structures of interaction.");
+    const r = highlightRanges(page, "As Krummheuer notes, ethnomethodological studies identify the structures of interaction.");
     const [start, end] = r.get(0)!;
     // The span must cover the citation too, not stop short at it.
     expect(start).toBe(0);
@@ -46,24 +60,24 @@ describe("pdf highlight matching", () => {
 
   test("collapsed whitespace and newlines", () => {
     const page = items("These  are\n  illustrated with   some key examples from research.");
-    const r = findHighlightRanges(page, "These are illustrated with some key examples from research.");
+    const r = highlightRanges(page, "These are illustrated with some key examples from research.");
     expect(r.size).toBe(1);
   });
 
   test("returns nothing when the sentence is not on the page", () => {
     const page = items("Completely unrelated content about marine biology and coral reefs.");
-    const r = findHighlightRanges(page, "This article outlines the key principles an ethnomethodological approach follows.");
+    const r = highlightRanges(page, "This article outlines the key principles an ethnomethodological approach follows.");
     expect(r.size).toBe(0);
   });
 
   test("fails closed on very short sentences", () => {
     const page = items("A page containing the word yes somewhere in it.");
-    expect(findHighlightRanges(page, "Yes.").size).toBe(0);
+    expect(highlightRanges(page, "Yes.").size).toBe(0);
   });
 
   test("picks a contiguous span, not scattered items", () => {
     const page = items("intro text ", "the key principles an ethnomethodological approach follows", " trailing text");
-    const r = findHighlightRanges(page, "the key principles an ethnomethodological approach follows");
+    const r = highlightRanges(page, "the key principles an ethnomethodological approach follows");
     expect(Array.from(r.keys())).toEqual([1]);
   });
 
@@ -74,13 +88,9 @@ describe("pdf highlight matching", () => {
     expect(Array.from(page.offsetOf)).toEqual([0, 1, 0, 1]);
   });
 
-  test("null sentence yields no ranges", () => {
-    expect(findHighlightRanges(items("anything"), null).size).toBe(0);
-  });
-
   test("range end never precedes start", () => {
     const page = normalizePage(items("some ordinary page text here for testing purposes"));
-    const r = findNormalizedRange(page, "some ordinary page text here for testing purposes");
+    const r = findNormalizedRange(page, normalizeSentence("some ordinary page text here for testing purposes"));
     expect(r).not.toBeNull();
     expect(r!.end).toBeGreaterThan(r!.start);
   });
@@ -89,14 +99,14 @@ describe("pdf highlight matching", () => {
 describe("anchor robustness", () => {
   test("citation immediately after the opening words", () => {
     const page = items("As Krummheuer (2011) notes, ethnomethodological studies identify structures.");
-    const r = findHighlightRanges(page, "As Krummheuer notes, ethnomethodological studies identify structures.");
+    const r = highlightRanges(page, "As Krummheuer notes, ethnomethodological studies identify structures.");
     expect(r.size).toBe(1);
   });
 
   test("a short accidental anchor with no matching ending is rejected", () => {
     // "the study of" appears, but the rest of the sentence does not.
     const page = items("the study of marine biology in coastal waters around the northern islands");
-    const r = findHighlightRanges(page, "the study of language use and classroom interaction within mathematics education");
+    const r = highlightRanges(page, "the study of language use and classroom interaction within mathematics education");
     expect(r.size).toBe(0);
   });
 
@@ -104,7 +114,7 @@ describe("anchor robustness", () => {
     const page = items(
       "Synthesized speech (Smith, 2019) can be created by concatenating pieces of recorded speech [3] that are stored in a database.",
     );
-    const r = findHighlightRanges(page, "Synthesized speech can be created by concatenating pieces of recorded speech that are stored in a database.");
+    const r = highlightRanges(page, "Synthesized speech can be created by concatenating pieces of recorded speech that are stored in a database.");
     const [s, e] = r.get(0)!;
     expect(page[0].str.slice(s, e)).toContain("(Smith, 2019)");
     expect(page[0].str.slice(s, e)).toContain("database");
@@ -118,17 +128,43 @@ describe("anchor robustness", () => {
       "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris. ",
       "Alternative patterns of communication in mathematics (Smith 2011) are studied in this short article here.",
     );
-    const r = findHighlightRanges(
+    const r = highlightRanges(
       page,
       "Alternative patterns of communication in mathematics are studied in this short article here.",
     );
     expect(Array.from(r.keys())).toEqual([2]);
   });
 
+  test("a citation straight after the first word", () => {
+    const page = items(
+      "Earlier text. Smith (2010) showed that children learn best through guided participation with peers.",
+    );
+    const r = highlightRanges(page, "Smith showed that children learn best through guided participation with peers.");
+    const [start, end] = r.get(0)!;
+    expect(page[0].str.slice(start, end)).toMatch(/^Smith \(2010\) showed.*peers$/);
+  });
+
+  test("a citation a few words in, after a sentence split mid-reference", () => {
+    const page = items(
+      "Wood et al. (1976) and in Bruner (1975a, 1975b), appears to be a detailed and well-elaborated synthesis of these ideas.",
+    );
+    const r = highlightRanges(page, "and in Bruner, appears to be a detailed and wellelaborated synthesis of these ideas.");
+    const [start, end] = r.get(0)!;
+    expect(page[0].str.slice(start, end)).toMatch(/^and in Bruner \(1975a, 1975b\), appears.*ideas$/);
+  });
+
+  test("an interrupted opening still needs its ending", () => {
+    const page = items(
+      "Smith (2010) showed that children learn best through guided participation, and nothing else follows here at all.",
+    );
+    const r = highlightRanges(page, "Smith showed that children learn best through guided participation with peers in class.");
+    expect(r.size).toBe(0);
+  });
+
   test("an unconfirmed long anchor is used only when no anchor confirms", () => {
     // The ending is off the page entirely, so the trusted head stands alone.
     const page = items("The study of language use and classroom interaction began.");
-    const r = findHighlightRanges(
+    const r = highlightRanges(
       page,
       "The study of language use and classroom interaction in schools across many countries today.",
     );
@@ -239,17 +275,6 @@ describe("sentence segments", () => {
     expect(findSentenceSegments([], [{ index: 0, text: S1 }]).size).toBe(0);
     expect(findSentenceSegments(items(S1), []).size).toBe(0);
     expect(findSentenceSegments(items(S1), [{ index: 0, text: "" }]).size).toBe(0);
-  });
-
-  test("findHighlightRanges still equals the merged bounds of one candidate", () => {
-    const page = items("The study of ", "language use and ", "classroom interaction.");
-    const ranges = findHighlightRanges(page, S1);
-    const segs = findSentenceSegments(page, [{ index: 0, text: S1 }]);
-
-    segs.forEach((list, itemIndex) => {
-      expect(ranges.get(itemIndex)).toEqual([list[0].from, list[list.length - 1].to]);
-    });
-    expect(ranges.size).toBe(segs.size);
   });
 });
 
@@ -365,5 +390,113 @@ describe("page candidates", () => {
     // it would lose the highlight entirely on such a document.
     expect(candidatesForPage(sentences, [], 2).map((c) => c.index)).toEqual([0, 1, 2, 3, 4, 5]);
     expect(candidatesForPage(sentences, [1, 1], 2)).toHaveLength(sentences.length);
+  });
+});
+
+describe("sentences crossing a page break", () => {
+  // Modelled on a real paper: the sentence's first words close page 11, under
+  // them the page's footer, and page 12 opens with its own head.
+  const sentence =
+    "Later, they met in Liege in July 1971; these meetings happened at the time when both of them were studying children's abilities at an early age.";
+  const page11 = items(
+    "the development of skilled movement in infancy and about Bernstein's research. ",
+    "Later, they met in",
+    "MIND, CULTURE, AND ACTIVITY",
+    "13",
+  );
+  const page12 = items(
+    "14",
+    "A. SHVARTS AND A. BAKKER",
+    "Liege in July 1971; these meetings happened at the time when both of them were studying children's",
+    "abilities at an early age.",
+    "14",
+    "From the Luria-Bruner correspondence, we know that their discussions influenced Bruner's writing.",
+  );
+  const owned = (segs: Map<number, SentenceSegment[]>) =>
+    Array.from(segs.keys()).sort((a, b) => a - b);
+
+  test("neither page alone can place it", () => {
+    expect(findSentenceSegments(page11, [{ index: 0, text: sentence }]).size).toBe(0);
+    expect(
+      findSentenceSegments(page12, [{ index: 0, text: sentence, lookbehind: true }]).size,
+    ).toBe(0);
+  });
+
+  test("its opening lights up on the page it starts on", () => {
+    const segs = findSentenceSegments(page11, [{ index: 0, text: sentence }], { after: page12 });
+    expect(owned(segs)).toEqual([1]);
+  });
+
+  test("a sentence whose ending straddles the page break lights up on both pages", () => {
+    const spilling =
+      "We look at the teacher's role as establishing conditions in which the learner may sense the required future state and creatively constitute her own system of action control and a system of sensory corrections.";
+    const end15 = items(
+      "We look at the teacher's role as establishing conditions in which the learner may sense the required",
+      "future state and creatively constitute her own system of action control and a system of sensory",
+      "MIND, CULTURE, AND ACTIVITY",
+      "15",
+    );
+    const start16 = items(
+      "16",
+      "A. SHVARTS AND A. BAKKER",
+      "corrections. Moreover, in some cases, the learner may became aware of her own system of regulation",
+    );
+
+    const onFirst = findSentenceSegments(end15, [{ index: 0, text: spilling }], { after: start16 });
+    expect(owned(onFirst)).toEqual([0, 1]);
+
+    const onSecond = findSentenceSegments(
+      start16,
+      [{ index: 0, text: spilling, lookbehind: true }],
+      { before: end15 },
+    );
+    expect(owned(onSecond)).toEqual([2]);
+    const [{ from, to }] = onSecond.get(2)!;
+    expect(start16[2].str.slice(from, to)).toBe("corrections");
+  });
+
+  test("its rest lights up overleaf, without the running head", () => {
+    const segs = findSentenceSegments(
+      page12,
+      [{ index: 0, text: sentence, lookbehind: true }],
+      { before: page11 },
+    );
+    expect(owned(segs)).toEqual([2, 3]);
+  });
+});
+
+describe("text beyond ASCII", () => {
+  test("ligatures in the PDF match the plain letters in the sentence", () => {
+    const page = items("The classiﬁcation of ﬁnite groups was eventually completed.");
+    const r = highlightRanges(page, "The classification of finite groups was eventually completed.");
+    expect(r.get(0)).toEqual([0, page[0].str.length - 1]);
+  });
+
+  test("accents match whether or not the sentence kept them", () => {
+    const page = items("Le café se trouve près de la gare centrale.");
+    expect(highlightRanges(page, "Le cafe se trouve pres de la gare centrale.").size).toBe(1);
+  });
+
+  test("non-Latin scripts are matched", () => {
+    const s = "Η γλώσσα είναι ένα σύστημα επικοινωνίας μεταξύ ανθρώπων.";
+    expect(highlightRanges(items(s), s).get(0)).toEqual([0, s.length - 1]);
+  });
+
+  test("a character whose lowercase is longer does not shift later offsets", () => {
+    // "İ".toLowerCase() is two characters; lowercasing the whole item at once
+    // would push every offset after it one place right.
+    const str = "İstanbul is a large city. Ankara is the capital of the country.";
+    const segs = findSentenceSegments(items(str), [
+      { index: 1, text: "Ankara is the capital of the country." },
+    ]);
+    const [{ from, to }] = segs.get(0)!;
+    expect(str.slice(from, to)).toBe("Ankara is the capital of the country");
+  });
+
+  test("normalizePage spans a surrogate pair as one character", () => {
+    const page = normalizePage(items("a𝐱b"));
+    expect(page.norm).toBe("axb");
+    expect(Array.from(page.offsetOf)).toEqual([0, 1, 3]);
+    expect(Array.from(page.endOf)).toEqual([1, 3, 4]);
   });
 });
